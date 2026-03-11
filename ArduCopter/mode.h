@@ -4,14 +4,20 @@
 #include <AP_Math/chirp.h>
 #include <AP_ExternalControl/AP_ExternalControl_config.h> // TODO why is this needed if Copter.h includes this
 #include <AP_HAL/Semaphores.h>
-
+#include <AP_Param/AP_Param.h>   // ensure included near the top of mode.h
 #if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
 #include "afs_copter.h"
 #endif
 
+
+// Enable Circle-NoGPS mode
+
+#ifndef MODE_CIRCLE_NOGPS_ENABLED
+#define MODE_CIRCLE_NOGPS_ENABLED 1
+#endif
+
 class Parameters;
 class ParametersG2;
-
 class GCS_Copter;
 
 // object shared by both Guided and Auto for takeoff.
@@ -101,7 +107,11 @@ public:
         AUTOROTATE =   26,  // Autonomous autorotation
         AUTO_RTL =     27,  // Auto RTL, this is not a true mode, AUTO will report as this mode if entered to perform a DO_LAND_START Landing sequence
         TURTLE =       28,  // Flip over after crash
-
+		POI = 29,   // choose an unused value
+		SNAKE = 31,
+		CIRCLE_NOGPS = 32,
+		GUIDED_ALT_HOLD = 33,
+		INTERCEPT = 34,
         // Mode number 30 reserved for "offboard" for external/lua control.
 
         // Mode number 127 reserved for the "drone show mode" in the Skybrush
@@ -256,7 +266,26 @@ protected:
         Flying
     };
     AltHoldModeState get_alt_hold_state_U_ms(float target_climb_rate_ms);
-
+    // Snake mode state (matches implementation in mode.cpp)
+    // Circle-NoGPS/AltHold-style state (mirrors AltHold states used by the impl in mode.cpp)
+    enum class CircleModeState {
+        MotorStopped,
+        Takeoff,
+        Landed_Ground_Idle,
+        Landed_Pre_Takeoff,
+        Flying
+    };
+	 CircleModeState get_circle_state(float target_climb_rate_cms);
+	// Snake mode state (AltHold-style state machine used by ModeSnake)
+    enum class SnakeModeState {
+        MotorStopped,
+        Takeoff,
+        Landed_Ground_Idle,
+        Landed_Pre_Takeoff,
+        Flying
+    };
+    SnakeModeState get_snake_state(float target_climb_rate_cms);
+   
     // convenience references to avoid code churn in conversion:
     Parameters &g;
     ParametersG2 &g2;
@@ -504,6 +533,273 @@ protected:
 
 private:
 
+};
+
+// ModePoi — holds attitude and computes the ground Point-Of-Interest (POI)
+// where the gimbal is pointing by intersecting the mount ray with terrain.
+// Optionally sets ROI and emits CAMERA_FEEDBACK.
+class ModePoi : public Mode {
+public:
+	using Mode::Mode;
+    // Required: unique number and names
+    Number mode_number() const override { return Number::POI; }
+    const char* name()  const override { return "POI"; }
+    const char* name4() const override { return "POI"; }
+
+    // Required capabilities
+    bool requires_GPS() const override { return true; }
+    bool has_manual_throttle() const override { return false; }
+    bool allows_arming(AP_Arming::Method) const override { return true; };
+    bool is_autopilot() const override { return true; }
+    bool has_user_takeoff(bool /*must_navigate*/) const override { return true; }
+    bool requires_terrain_failsafe() const override { return true; }
+
+    // Mode API
+    ModePoi();
+    bool init(bool ignore_checks) override;
+    void run() override;
+
+private:
+    // Parameters
+    struct Params {
+        // POI_DIST_MAX: Maximum forward distance to search along the mount ray (meters)
+        AP_Float dist_max;
+        // POI_STEP_M: Step size along the ray (meters); if 0, use default/fallback
+        AP_Float step_m;
+        // POI_SET_ROI: If 1, set ROI to the solved POI
+        AP_Int8  set_roi;
+        // POI_AUTO_ONCE: If 1, compute once on entry then auto-exit to previous mode
+        AP_Int8  auto_once;
+    } _params;
+
+    // AP_Param table for POI_* params
+    static const AP_Param::GroupInfo var_info[];
+
+    Mode::Number _return_mode;
+
+    // Helpers
+    bool compute_poi(Location &poi_out);
+    bool get_mount_attitude_deg(float &pitch_deg, float &yaw_ef_deg) const;
+    bool terrain_height_amsl(const Location &loc, float &h_amsl) const;
+    bool camera_feedback(const Location &poi);
+    void say(const char *fmt, ...);
+    float step_size_m() const;
+    void hold_attitude_only();
+
+    // State
+    bool     _did_once = false;
+    uint16_t _capture_idx = 0;
+};
+
+// --- ModeSnake --------------------------------------------------------------
+
+class ModeSnake : public Mode {
+public:
+    using Mode::Mode;
+    ModeSnake();
+    // --- Identification ---
+    Number mode_number() const override { return Number::SNAKE; }
+    const char* name()  const override { return "SNAKE"; }
+    const char* name4() const override { return "SNKE"; }   // 4-char tag for GCS
+    // --- Mode lifecycle ---
+    bool init(bool ignore_checks) override;
+    void run() override;
+    // --- Capabilities ---
+    bool requires_GPS() const override { return true; }
+    bool has_manual_throttle() const override { return false; }
+    // --- Arming policy ---
+    bool allows_arming(AP_Arming::Method /*method*/) const override { return true; }
+	bool is_autopilot() const override { return false; }
+    // ---------------------------
+    // Parameters (SNAKE_DIST, SNAKE_SPEED, SNAKE_ROLL)
+    // -----------------------------
+    static const AP_Param::GroupInfo var_info[];
+    AP_Float _p_dist_m;     // meters
+    AP_Float _p_speed_ms;   // m/s
+    AP_Float _p_roll_deg;   // degrees
+    AP_Float _p_turn_deg;   // degrees
+    // -----------------------------
+    // Phase machine for Snake mode
+    // -----------------------------
+	enum class SnakePhase : uint8_t {
+		CALIBRATE,      // speed-hold calibration window
+		EXECUTE,        // main outbound run
+		TURNAROUND,     // yaw 180° to head back
+		RETURN,         // returning leg
+		DONE            // mission complete
+	};
+private:
+    // --- state ---
+    SnakePhase _phase{};            // current phase
+    // Calibration accumulators
+    float      _calib_pitch_deg_per_ms{};  // deg per (m/s)
+    float      _calib_pitch_deg_cmd{};
+    float      _calib_pi_int{};            // <-- Add this line
+    float      _gs_lpf_cms{};
+    uint32_t   _exec_time_ms{};
+	uint32_t _gs_over_start_ms{};  // start time when forward speed exceeds target (ms)
+	float    _calib_dist_m{};      // distance covered during CALIBRATE (m)
+	float    _remaining_dist_m{};  // remaining outbound distance after calibration (m)
+	float    _v_exec_ms{};         // locked-in execute speed (m/s)
+	float    _next_report_m{};     // next distance milestone for GCS messages (m)
+	float    _return_yaw_rad{};    // commanded yaw heading for TURNAROUND (rad)
+    // Timing / headings
+    uint32_t   _phase_start_ms{};
+    float      _start_yaw_rad{};
+    float      _outbound_total_m{};
+    float      _return_dist_m{};
+	uint32_t   _last_toggle_ms{};     // timestamp of last roll-direction toggle (ms)
+    // Motion bookkeeping
+    float      _dist_m{};
+    int8_t     _yaw_dir{};
+    // EW open-loop flag (false until calibration completes)
+    bool       _open_loop{false};
+    // --- GPS sanity / RTL gating ---
+    uint32_t   _gps_check_start_ms{0};
+    uint32_t   _gps_ok_count{0};
+    uint32_t   _gps_bad_count{0};
+    bool       _gps_last_valid{false};
+    Location   _gps_last_loc{};
+    bool       _rtl_armed{false};
+    // helpers
+    float get_forward_speed_cms() const;
+};
+
+// -----------------------------------------------------------
+// Circle-NoGPS Mode
+// -----------------------------------------------------------
+class ModeCircleNoGPS : public Mode {
+public:
+	using Mode::Mode;
+    ModeCircleNoGPS();
+    // ---- Required pure-virtuals ----
+    Number mode_number() const override { return Number::CIRCLE_NOGPS; }  // 32
+    bool init(bool ignore_checks) override;
+    void run() override;
+    bool requires_GPS() const override { return false; }          // works without GPS
+    bool has_manual_throttle() const override { return false; }   // AltHold-style (auto throttle)
+    bool allows_arming(AP_Arming::Method) const override { return true; };
+	bool is_autopilot() const override { return false; }
+    // (Optional niceties)
+    const char* name()  const override { return "CIRCLE_NOGPS"; }
+    const char* name4() const override { return "MCNG"; }
+    
+    // ---- Parameters (backed by AP_Param; defined in .cpp table) ----
+    static const AP_Param::GroupInfo var_info[];
+    AP_Float target_speed_ms;       // CNGPS_SPEED (m/s)
+    AP_Float max_pitch_deg;         // CNGPS_MAX_P (deg)
+    AP_Float max_pitchrate_dps;     // CNGPS_MAX_PR (deg/s)
+    AP_Float gs_lpf_alpha;          // CNGPS_GS_LPF (0..1)
+    AP_Float exec_kp;               // CNGPS_KP
+    AP_Float exec_ki;               // CNGPS_KI
+    AP_Float int_clamp;             // CNGPS_INTLIM (m/s*s)
+    AP_Float exec_pitch_bias_deg;   // CNGPS_BIAS (deg)
+    AP_Float radius_m;              // CNGPS_RADIUS (m)
+    AP_Int8  ccw;                   // CNGPS_DIR (1=CCW, 0=CW)
+    AP_Float max_yawrate_dps;       // CNGPS_MAX_YR (deg/s)
+    AP_Float min_speed_for_omega;   // CNGPS_MIN_OMEGA (m/s)
+    AP_Int16 report_every_sec;      // CNGPS_REPORT_S (seconds)
+    // utility
+    float get_forward_speed_cms() const;
+private:
+    // state
+    float    _gs_lpf_cms = 0.0f;
+    float    _calib_pi_int = 0.0f;
+    float    _calib_pitch_deg_cmd = 0.0f;
+    uint32_t _phase_start_ms = 0;
+    uint32_t _last_toggle_ms = 0;
+};
+
+
+class ModeGuidedAltHold : public Mode {
+public:
+    // inherit constructor
+    using Mode::Mode;
+    Number mode_number() const override { return Number::GUIDED_ALT_HOLD; }
+	void set_pilot_desired_attitude(float roll_cd, float pitch_cd, float yaw_cd);
+	bool is_ready();
+    bool init(bool ignore_checks) override;
+    void run() override;
+    bool requires_GPS() const override;
+    bool has_manual_throttle() const override { return false; }
+    bool allows_arming(AP_Arming::Method method) const override { return true; };
+    bool is_autopilot() const override { return false; }
+    bool has_user_takeoff(bool must_navigate) const override {
+        return !must_navigate;
+    }
+    bool allows_autotune() const override { return false; }
+    bool allows_flip() const override { return false; }
+    bool allows_auto_trim() const override { return true; }
+    bool allows_save_trim() const override { return true; }
+#if FRAME_CONFIG == HELI_FRAME
+    bool allows_inverted() const override { return true; };
+#endif
+protected:
+    const char *name() const override { return "GUIDED_ALT_HOLD"; }
+    const char *name4() const override { return "GUAH"; }
+private:
+
+	float _roll_rad  = 0.0f;  // radians
+    float _pitch_rad = 0.0f;  // radians
+    float _yaw_cd    = 0.0f;  // centidegrees (absolute heading target)
+    uint32_t _reacq_start_ms = 0; // debounce start for GPS healthy
+};
+
+class ModeIntercept : public Mode {
+public:
+    using Mode::Mode;
+    ModeIntercept();
+
+    // --- Mode identity ---
+    Number mode_number() const override { return Number::INTERCEPT; }
+    const char* name()  const override { return "INTERCEPT"; }
+    const char* name4() const override { return "INTC"; }
+
+    // --- Mode lifecycle ---
+    bool init(bool ignore_checks) override;
+    void run() override;
+
+    // --- Capabilities ---
+    bool requires_GPS() const override { return false; }
+    bool has_manual_throttle() const override { return true; }   // like STABILIZE
+    bool allows_arming(AP_Arming::Method) const override { return true; }
+    bool is_autopilot() const override { return false; }
+
+    // --- Parameters ---
+    static const AP_Param::GroupInfo var_info[];
+
+    // ===== User-exposed parameters =====
+
+    AP_Float max_angle_deg;      // INTC_ANG_MAX   max roll/pitch angle
+    AP_Float stop_dist_m;        // INTC_STOP_M   (unused, compatibility)
+
+    AP_Float k_lat;              // INTC_K_LAT    lateral P gain (x_norm -> roll)
+    AP_Float k_fwd;              // INTC_K_FWD    forward P gain (y_norm -> pitch)
+
+    AP_Int8  sign_x;             // INTC_SIGNX    lateral sign flip
+
+    AP_Float ki_fwd;             // INTC_KI_FWD   forward I gain
+    AP_Float kd_fwd;             // INTC_KD_FWD   forward D gain (pitch)
+
+    AP_Float kd_lat;             // INTC_KD_LAT   shared D damping (roll + pitch)
+
+    AP_Float pn_gain;            // INTC_PN_GAIN  LOS-rate (PN) guidance gain
+    AP_Float pn_e0;              // INTC_PN_E0    error threshold for PN blend
+
+    AP_Float fixed_throttle;     // INTC_THR_MAN  fixed throttle when target valid
+    AP_Int32 lost_to_loiter_ms;  // INTC_LOST_MS timeout before switching to LOITER
+	AP_Float fixed_throttle_nolock;   // THR_NOLK
+    // ===== Internal controller state =====
+
+    float fwd_i = 0.0f;          // forward integrator
+    float fwd_last_err = 0.0f;   // previous forward error (for D term)
+    float x_filt = 0.0f;
+    float y_filt = 0.0f;
+    float prev_roll_cmd = 0.0f;
+    float prev_pitch_cmd = 0.0f;
+    float hold_roll_cmd = 0.0f;
+    float hold_pitch_cmd = 0.0f;
+    float x_last_filt = 0.0f;
 };
 
 class ModeAuto : public Mode {
@@ -806,7 +1102,7 @@ public:
 
 protected:
     bool position_ok() override;
-    float get_pilot_desired_climb_rate_cms(void) const override;
+    float get_desired_climb_rate_ms(void) const override;
     void get_pilot_desired_rp_yrate_rad(float &des_roll_rad, float &des_pitch_rad, float &des_yaw_rate_rads) override;
     void init_z_limits() override;
 #if HAL_LOGGING_ENABLED
@@ -1558,10 +1854,11 @@ private:
     bool terrain_following_allowed;
 
     // enum for RTL_OPTIONS parameter
-    enum class Options : int32_t {
+    enum class Option : int32_t {
         // First pair of bits are still available, pilot yaw was mapped to bit 2 for symmetry with auto
         IgnorePilotYaw    = (1U << 2),
     };
+    bool option_is_enabled(Option option) const;
 
 };
 
@@ -1919,7 +2216,7 @@ public:
 
     bool requires_GPS() const override { return true; }
     bool has_manual_throttle() const override { return false; }
-    bool allows_arming(AP_Arming::Method method) const override { return false; }
+    bool allows_arming(AP_Arming::Method method) const override { return false; };
     bool is_autopilot() const override { return true; }
 
 protected:
@@ -1968,7 +2265,7 @@ public:
 
     bool requires_GPS() const override { return true; }
     bool has_manual_throttle() const override { return false; }
-    bool allows_arming(AP_Arming::Method method) const override { return true; }
+    bool allows_arming(AP_Arming::Method method) const override { return true; };
     bool is_autopilot() const override { return true; }
     bool has_user_takeoff(bool must_navigate) const override { return true; }
 

@@ -205,6 +205,12 @@ public:
     friend class ModeAcro_Heli;
     friend class ModeAltHold;
     friend class ModeAuto;
+	friend class ModeSnake;
+	friend class ModePoi;
+	friend class ModeCircleNoGPS;
+	friend class ModeGuidedAltHold;
+	friend class ModeIntercept;
+	friend class GuidedAltHoldCmd;
     friend class ModeAutoTune;
     friend class ModeAvoidADSB;
     friend class ModeBrake;
@@ -332,7 +338,14 @@ private:
         uint32_t start_ms;  // system time high vibration were last detected
         uint32_t clear_ms;  // system time high vibrations stopped
     } vibration_check;
+	struct GuidedAltHoldCmd {
+		bool  valid     = false;
+		float roll_rad  = 0.0f;   // radians
+		float pitch_rad = 0.0f;   // radians
+		float yaw_cd    = 0.0f;   // centidegrees
+	};
 
+	// EKF variances are unfiltered and are designed to recover very quickly when possible
     // EKF variances are unfiltered and are designed to recover very quickly when possible
     // thus failsafes should be triggered on filtered values in order to avoid transient errors 
     LowPassFilterFloat pos_variance_filt;
@@ -1102,6 +1115,12 @@ private:
 #if MODE_TURTLE_ENABLED
     ModeTurtle mode_turtle;
 #endif
+	ModePoi mode_poi; 
+	ModeSnake mode_snake;
+	ModeCircleNoGPS mode_circle_nogps;
+	GuidedAltHoldCmd  guided_althold_cmd;
+	ModeGuidedAltHold mode_guided_althold;
+	ModeIntercept mode_intercept;
 
     // mode.cpp
     Mode *mode_from_mode_num(const Mode::Number mode);
@@ -1109,7 +1128,15 @@ private:
 
     bool started_rate_thread;
     bool using_rate_thread;
+	struct InterceptTarget {
+		bool     valid = false;
+		float    x_norm = 0.0f;        // -1..+1 (+right)
+		float    dist_m = 0.0f;        // distance to target (m) OR your "range error" if you’re using it that way
+		uint8_t  quality = 0;          // 0 invalid, >0 valid
+		uint32_t last_update_ms = 0;
+	};
 
+InterceptTarget intercept_target;
 public:
     void failsafe_check();      // failsafe.cpp
 };

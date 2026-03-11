@@ -88,7 +88,7 @@ const AP_Param::Info Copter::var_info[] = {
     // @Param: RTL_CONE_SLOPE
     // @DisplayName: RTL cone slope
     // @Description: Defines a cone above home which determines maximum climb
-    // @Range: 0.5 10.0
+    // @Range: 0 10.0
     // @Increment: 0.1
     // @Values: 0:Disabled,1:Shallow,3:Steep
     // @User: Standard
@@ -230,7 +230,7 @@ const AP_Param::Info Copter::var_info[] = {
     // @Param: FLTMODE1
     // @DisplayName: Flight Mode 1
     // @Description: Flight mode when pwm of Flightmode channel(FLTMODE_CH) is <= 1230
-    // @Values: 0:Stabilize,1:Acro,2:AltHold,3:Auto,4:Guided,5:Loiter,6:RTL,7:Circle,9:Land,11:Drift,13:Sport,14:Flip,15:AutoTune,16:PosHold,17:Brake,18:Throw,19:Avoid_ADSB,20:Guided_NoGPS,21:Smart_RTL,22:FlowHold,23:Follow,24:ZigZag,25:SystemID,26:Heli_Autorotate,27:Auto RTL,28:Turtle
+    // @Values: 0:Stabilize,1:Acro,2:AltHold,3:Auto,4:Guided,5:Loiter,6:RTL,7:Circle,9:Land,11:Drift,13:Sport,14:Flip,15:AutoTune,16:PosHold,17:Brake,18:Throw,19:Avoid_ADSB,20:Guided_NoGPS,21:Smart_RTL,22:FlowHold,23:Follow,24:ZigZag,25:SystemID,26:Heli_Autorotate,27:Auto RTL,28:Turtle,31:Snake,32:CircleNoGPS,33:GuidedAltHols,34:Intercept
     // @User: Standard
     GSCALAR(flight_mode1, "FLTMODE1",               (uint8_t)FLIGHT_MODE_1),
 
@@ -373,7 +373,8 @@ const AP_Param::Info Copter::var_info[] = {
     // @Param: FS_EKF_THRESH
     // @DisplayName: EKF failsafe variance threshold
     // @Description: Allows setting the maximum acceptable compass, velocity, position and height variances. Used in arming check and EKF failsafe.
-    // @Values: 0.6:Strict, 0.8:Default, 1.0:Relaxed
+    // @Values: 0:Disabled, 0.6:Strict, 0.8:Default, 1.0:Relaxed
+    // @Range: 0.0 1.0
     // @User: Advanced
     GSCALAR(fs_ekf_thresh, "FS_EKF_THRESH",    FS_EKF_THRESHOLD_DEFAULT),
 
@@ -1228,7 +1229,15 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
 #endif  // AP_RC_TRANSMITTER_TUNING_ENABLED
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
+#ifdef MODE_SNAKE_ENABLED
+    AP_SUBGROUPPTR(mode_snake_ptr, "SNAKE_", 14, ParametersG2, ModeSnake),
+#endif
 
+#ifdef MODE_INTERCEPT_ENABLED
+    // @Group: INTC_
+    // @Path: mode_intercept.cpp
+    AP_SUBGROUPPTR(mode_intercept_ptr, "INTC_", 15, ParametersG2, ModeIntercept),
+#endif
     AP_GROUPEND
 };
 
@@ -1292,6 +1301,15 @@ ParametersG2::ParametersG2(void) :
 {
     AP_Param::setup_object_defaults(this, var_info);
     AP_Param::setup_object_defaults(this, var_info2);
+#if MODE_SNAKE_ENABLED
+    mode_snake_ptr = &copter.mode_snake;   // ✅ correct
+#endif
+#if MODE_CIRCLE_NOGPS_ENABLED
+   mode_circle_nogps_ptr = &copter.mode_circle_nogps;   // assign in body — no comma issues
+#endif
+#if MODE_INTERCEPT_ENABLED
+   mode_intercept_ptr = &copter.mode_intercept;   // assign in body — no comma issues
+#endif
 }
 
 void Copter::load_parameters(void)

@@ -64,6 +64,7 @@ protected:
     uint8_t send_available_mode(uint8_t index) const override;
 
 private:
+    void handle_message_intercept_target(const mavlink_message_t &msg);
 
     // sanity check velocity or acceleration vector components are numbers
     // (e.g. not NaN) and below 1000. vec argument units are in meters/second or

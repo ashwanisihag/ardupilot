@@ -505,7 +505,9 @@ public:
     // ParametersG2 can be created with a relatively easy syntax in
     // the face of many #ifs:
     uint8_t unused_integer;
-
+#if MODE_CIRCLE_NOGPS_ENABLED
+    ModeCircleNoGPS* mode_circle_nogps_ptr;   // <— add this
+#endif
     // button checking
 #if HAL_BUTTON_ENABLED
     AP_Button *button_ptr;
@@ -701,6 +703,12 @@ public:
     AP_Float rc_tuning2_min;
     AP_Float rc_tuning2_max;
 #endif  // AP_RC_TRANSMITTER_TUNING_ENABLED
+#ifdef MODE_SNAKE_ENABLED
+    void *mode_snake_ptr; // pointer used to expose ModeSnake params
+#endif
+#ifdef MODE_INTERCEPT_ENABLED
+    void *mode_intercept_ptr; // pointer used to expose ModeSnake params
+#endif
 };
 
 extern const AP_Param::Info        var_info[];

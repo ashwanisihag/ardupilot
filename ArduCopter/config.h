@@ -126,6 +126,18 @@
  # define AC_NAV_GUIDED    1
 #endif
 
+// Enable Circle-NoGPS mode
+#ifndef MODE_CIRCLE_NOGPS_ENABLED
+#define MODE_CIRCLE_NOGPS_ENABLED 1
+#endif
+
+#ifndef MODE_SNAKE_ENABLED
+# define MODE_SNAKE_ENABLED 1    // enable by default; set to 0 to compile out
+#endif
+
+#ifndef MODE_INTERCEPT_ENABLED
+# define MODE_INTERCEPT_ENABLED 1    // enable by default; set to 0 to compile out
+#endif
 //////////////////////////////////////////////////////////////////////////////
 // Acro - fly vehicle in acrobatic mode
 #ifndef MODE_ACRO_ENABLED

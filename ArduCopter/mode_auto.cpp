@@ -1,7 +1,291 @@
 #include "Copter.h"
 
-#if MODE_AUTO_ENABLED
 
+// ---------------------------------------------------------------------------
+// Compile-time switch for GPS threat detector
+// Set to 1 to enable spoof/jam detection, 0 to disable at compile time
+#ifndef GPS_THREAT_DETECTOR
+#define GPS_THREAT_DETECTOR 1
+#endif
+// ---------------------------------------------------------------------------
+
+
+#if MODE_AUTO_ENABLED
+// --- at top of ArduCopter/mode_auto.cpp (file scope) ---
+namespace {
+
+// 5 s rolling window sampled at ~50 Hz. We average yaw via sin/cos.
+struct AttitudeWindowAvg {
+    static constexpr uint16_t WINDOW_MS        = 5000;
+    static constexpr uint16_t SAMPLE_PERIOD_MS = 20;   // 50 Hz
+    static constexpr uint16_t MAX_SAMPLES      = (WINDOW_MS / SAMPLE_PERIOD_MS) + 50; // headroom
+
+    float    roll_cd[MAX_SAMPLES];
+    float    pitch_cd[MAX_SAMPLES];
+    float    yaw_sin[MAX_SAMPLES];
+    float    yaw_cos[MAX_SAMPLES];
+    uint32_t ts_ms[MAX_SAMPLES];
+
+    double   roll_sum_cd  = 0.0;
+    double   pitch_sum_cd = 0.0;
+    double   yaw_sin_sum  = 0.0;
+    double   yaw_cos_sum  = 0.0;
+
+    uint16_t begin = 0;
+    uint16_t size  = 0;
+    uint32_t last_sample_ms = 0;
+
+    void reset() {
+        roll_sum_cd = pitch_sum_cd = yaw_sin_sum = yaw_cos_sum = 0.0;
+        begin = size = 0;
+        last_sample_ms = 0;
+    }
+
+    void pop_oldest() {
+        if (size == 0) { return; }
+        roll_sum_cd  -= roll_cd[begin];
+        pitch_sum_cd -= pitch_cd[begin];
+        yaw_sin_sum  -= yaw_sin[begin];
+        yaw_cos_sum  -= yaw_cos[begin];
+        begin = (uint16_t)((begin + 1) % MAX_SAMPLES);
+        size--;
+    }
+
+    void purge_older_than(uint32_t now) {
+        while (size > 0) {
+            uint16_t idx = begin;
+            if ((uint32_t)(now - ts_ms[idx]) <= WINDOW_MS) {
+                break;
+            }
+            pop_oldest();
+        }
+    }
+
+    void sample_from_ahrs_if_due() {
+        const uint32_t now = AP_HAL::millis();
+        if (last_sample_ms != 0 && (uint32_t)(now - last_sample_ms) < SAMPLE_PERIOD_MS) {
+            return;
+        }
+        last_sample_ms = now;
+
+        purge_older_than(now);
+
+		const float roll_rad  = AP::ahrs().get_roll();
+		const float pitch_rad = AP::ahrs().get_pitch();
+		const float yaw_rad   = AP::ahrs().get_yaw();
+
+
+        const float r_cd = degrees(roll_rad)  * 100.0f;
+        const float p_cd = degrees(pitch_rad) * 100.0f;
+        const float ys   = sinf(yaw_rad);
+        const float yc   = cosf(yaw_rad);
+
+        if (size == MAX_SAMPLES) {
+            pop_oldest();
+        }
+
+        const uint16_t idx = (uint16_t)((begin + size) % MAX_SAMPLES);
+        roll_cd[idx]  = r_cd;
+        pitch_cd[idx] = p_cd;
+        yaw_sin[idx]  = ys;
+        yaw_cos[idx]  = yc;
+        ts_ms[idx]    = now;
+
+        roll_sum_cd  += r_cd;
+        pitch_sum_cd += p_cd;
+        yaw_sin_sum  += ys;
+        yaw_cos_sum  += yc;
+        size++;
+    }
+
+    bool get_avg(float &roll_rad, float &pitch_rad, float &yaw_cd) const {
+        if (size == 0) { return false; }
+        const float r_cd = float(roll_sum_cd  / double(size));
+        const float p_cd = float(pitch_sum_cd / double(size));
+        const float ys   = float(yaw_sin_sum  / double(size));
+        const float yc   = float(yaw_cos_sum  / double(size));
+        roll_rad  = radians(r_cd / 100.0f);
+        pitch_rad = radians(p_cd / 100.0f);
+        const float yaw_rad = atan2f(ys, yc);
+        yaw_cd = degrees(yaw_rad) * 100.0f;
+        return true;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Insert START: GPSThreatDetector (PoC - Option A)
+// Minimal spoof/jam heuristic detector. Tune thresholds as needed.
+// ---------------------------------------------------------------------------
+#if GPS_THREAT_DETECTOR
+struct GPSThreatDetector {
+    
+    // Global detection flag as a static class member
+    static bool threat_detected;
+// Thresholds (tune for your environment/hardware)
+    static constexpr unsigned SAMPLE_PERIOD_MS = 250;   // sample every 250 ms
+    static constexpr float SATS_THRESHOLD = 4.0f;       // sats below -> score
+    static constexpr float HDOP_THRESHOLD = 3.0f;       // hdop above -> score
+    static constexpr float POS_JUMP_THRESHOLD_M = 20.0f;// large position jump -> score
+    static constexpr float VEL_MISMATCH_THRESHOLD_MS = 5.0f; // |GPS speed - INS speed| -> score
+    static constexpr float SCORE_DECAY = 0.6f;          // rolling decay
+    static constexpr float SCORE_GAIN = 0.4f;
+    static constexpr float SCORE_ALARM = 3.0f;          // threshold to count as alert
+    static constexpr int   CONSECUTIVE_ALERTS_REQ = 2;  // consecutive samples to declare threat
+
+    uint32_t last_sample_ms = 0;
+    float prev_score = 0.0f;
+    int consecutive_alerts = 0;
+
+    Location last_loc;
+    bool have_last_loc = false;
+
+    void reset() {
+        last_sample_ms = 0;
+        prev_score = 0.0f;
+        consecutive_alerts = 0;
+        have_last_loc = false;
+    }
+
+    
+static float distance_m(const Location &a, const Location &b) {
+    // Haversine distance using ArduPilot Location lat/lng scaling (1e-7 degrees)
+    const double DEG2RAD = 0.017453292519943295;
+    const double lat1 = static_cast<double>(a.lat) * 1e-7 * DEG2RAD;
+    const double lon1 = static_cast<double>(a.lng) * 1e-7 * DEG2RAD;
+    const double lat2 = static_cast<double>(b.lat) * 1e-7 * DEG2RAD;
+    const double lon2 = static_cast<double>(b.lng) * 1e-7 * DEG2RAD;
+    const double dlat = lat2 - lat1;
+    const double dlon = lon2 - lon1;
+    const double sdlat2 = sin(dlat * 0.5);
+    const double sdlon2 = sin(dlon * 0.5);
+    const double a_hav = sdlat2*sdlat2 + cos(lat1)*cos(lat2)*sdlon2*sdlon2;
+    const double c = 2.0 * atan2(sqrt(a_hav), sqrt(1.0 - a_hav));
+    return static_cast<float>(6371000.0 * c); // meters
+}
+
+
+    
+
+    // Attempt to retrieve EKF/INS speed (m/s). Tries several APIs across ArduPilot versions.
+    static float get_ekf_speed_ms() {
+        // Preferred: AHRS/EKF velocity if available
+        // Many trees expose one of these; we guard with if constexpr comments for human guidance.
+        // Replace with the exact API your tree provides if this doesn't compile.
+        Vector3f vel;
+        bool ok = false;
+        // Try common AHRS API for NED velocity
+        // Example signatures (choose the one your tree supports):
+        //   bool AP_AHRS::get_velocity_NED(Vector3f &vel) const;
+        //   bool AP_AHRS::get_velocity(Vector3f &vel) const;
+        // We'll attempt both; if neither exists in your build, replace with your EKF access.
+        #if defined(HAVE_AHRS_GET_VELOCITY_NED)
+            ok = AP::ahrs().get_velocity_NED(vel);
+        #elif defined(HAVE_AHRS_GET_VELOCITY)
+            ok = AP::ahrs().get_velocity(vel);
+        #else
+            // Unconditional try; if your build lacks this symbol, swap to the correct one.
+            ok = AP::ahrs().get_velocity_NED(vel);
+        #endif
+        if (ok) {
+            // NED speed magnitude
+            return vel.length();
+        }
+        // Fallback: if position controller exposes estimated velocity (NEU), use that
+        #if defined(HAVE_POSCTRL_GET_VEL_ESTIMATE)
+            Vector3f vel_neu = copter.pos_control->get_vel_estimate_NEU_ms();
+            return vel_neu.length();
+        #endif
+        // As a last resort, return -1 to indicate unavailable
+        return -1.0f;
+    }
+
+void on_detection() {
+        gcs().send_text(MAV_SEVERITY_CRITICAL, "GPS Spoof/Jam suspected - entering conservative fallback");
+        // global flag declared below at file scope
+        GPSThreatDetector::threat_detected = true;
+    }
+
+    void sample_and_check() {
+        const uint32_t now = AP_HAL::millis();
+        if (last_sample_ms != 0 && (now - last_sample_ms) < SAMPLE_PERIOD_MS) {
+            return;
+        }
+        const uint32_t dt_ms = (last_sample_ms == 0) ? SAMPLE_PERIOD_MS : now - last_sample_ms;
+        last_sample_ms = now;
+        (void)dt_ms; // currently unused, keep for future use
+
+        // --- Obtain GPS data ---
+        // Replace these with exact API names if your AP_GPS differs.
+        const int sats = AP::gps().num_sats();
+    // HDOP not used (API varies by tree)
+        const Location cur_loc = AP::gps().location();
+
+        float local_score = 0.0f;
+        if (sats > 0 && sats < SATS_THRESHOLD) {
+            local_score += 1.0f;
+        }
+    // HDOP check disabled: API differs across versions
+if (have_last_loc) {
+            const float d_m = distance_m(cur_loc, last_loc);
+            if (d_m > POS_JUMP_THRESHOLD_M) {
+                local_score += 2.0f;
+            }
+        }
+
+        // --- EKF/IMU vs GPS speed consistency check ---
+        // Compute GPS-derived speed from position delta and dt
+        float gps_speed_ms = -1.0f;
+        if (have_last_loc) {
+            const float d_m_for_speed = distance_m(cur_loc, last_loc);
+            const float dt_s = (dt_ms > 0 ? (dt_ms * 0.001f) : (SAMPLE_PERIOD_MS * 0.001f));
+            if (dt_s > 1e-3f) {
+                gps_speed_ms = d_m_for_speed / dt_s;
+            }
+        }
+        const float ekf_speed_ms = get_ekf_speed_ms();
+        if (gps_speed_ms >= 0.0f && ekf_speed_ms >= 0.0f) {
+            const float vel_err = fabsf(gps_speed_ms - ekf_speed_ms);
+            if (vel_err > VEL_MISMATCH_THRESHOLD_MS) {
+                // Large inconsistency between GPS speed and INS/EKF speed
+                local_score += 2.0f;
+            }
+        }
+
+        prev_score = SCORE_DECAY * prev_score + SCORE_GAIN * local_score;
+
+        if (prev_score >= SCORE_ALARM) {
+            consecutive_alerts++;
+        } else {
+            consecutive_alerts = 0;
+        }
+
+        last_loc = cur_loc;
+        have_last_loc = true;
+
+        if (consecutive_alerts >= CONSECUTIVE_ALERTS_REQ) {
+            on_detection();
+            // prevent retrigger spam
+            consecutive_alerts = CONSECUTIVE_ALERTS_REQ;
+        }
+    }
+};
+
+#if GPS_THREAT_DETECTOR
+bool GPSThreatDetector::threat_detected = false;
+#endif // GPS_THREAT_DETECTOR
+
+// File-scope detector instance & flag
+static GPSThreatDetector gps_threat_detector;
+// ---------------------------------------------------------------------------
+// Insert END: GPSThreatDetector
+// ---------------------------------------------------------------------------
+
+
+
+
+static AttitudeWindowAvg s_attavg;
+
+} // namespace
 /*
  * Init and run calls for auto flight mode
  *
@@ -60,7 +344,7 @@ bool ModeAuto::init(bool ignore_checks)
         // initialise precland state machine
         copter.precland_statemachine.init();
 #endif
-
+		s_attavg.reset();
         return true;
     } else {
         return false;
@@ -84,6 +368,55 @@ void ModeAuto::exit()
 //      should be called at 100hz or more
 void ModeAuto::run()
 {
+	// --- at the very start of Copter::ModeAuto::run() ---
+
+	// 1) While GPS is healthy, accumulate into 5 s window
+	if (AP::gps().is_healthy() && !GPSThreatDetector::threat_detected) {
+		s_attavg.sample_from_ahrs_if_due();
+	
+    // PoC: sample GPS threat detector
+    #if GPS_THREAT_DETECTOR
+    gps_threat_detector.sample_and_check();
+#endif
+}
+	// 2) On first unhealthy GPS detection, hand off to GUIDED_ALT_HOLD
+	else {
+		// Only trigger once; after switching, we won't be in AUTO::run() anymore
+		float r_rad, p_rad, y_cd;
+		if (s_attavg.get_avg(r_rad, p_rad, y_cd)) {
+			copter.guided_althold_cmd.valid     = true;
+			copter.guided_althold_cmd.roll_rad  = r_rad;
+			copter.guided_althold_cmd.pitch_rad = p_rad;
+			copter.guided_althold_cmd.yaw_cd    = y_cd;
+		} else {
+			// fallback: instantaneous attitude if no samples
+			copter.guided_althold_cmd.valid     = true;
+			
+			copter.guided_althold_cmd.roll_rad  = AP::ahrs().get_roll();
+            copter.guided_althold_cmd.pitch_rad = AP::ahrs().get_pitch();
+            copter.guided_althold_cmd.yaw_cd    = degrees(AP::ahrs().get_yaw()) * 100.0f;
+		}
+		gcs().send_text(
+			MAV_SEVERITY_INFO,
+			"AUTO->GAH handoff: valid=%u roll=%.2fdeg pitch=%.2fdeg yaw=%.1fdeg",
+			(unsigned)copter.guided_althold_cmd.valid,
+			(double)degrees(copter.guided_althold_cmd.roll_rad),
+			(double)degrees(copter.guided_althold_cmd.pitch_rad),
+			(double)(copter.guided_althold_cmd.yaw_cd * 0.01f)
+		);
+
+		gcs().send_text(
+			MAV_SEVERITY_INFO,
+			"AUTO->GAH raw(rad): r=%.3f p=%.3f yaw_cd=%ld",
+			(double)copter.guided_althold_cmd.roll_rad,
+			(double)copter.guided_althold_cmd.pitch_rad,
+			(long)copter.guided_althold_cmd.yaw_cd
+		);
+		gcs().send_text(MAV_SEVERITY_WARNING, "GPS unhealthy: switching to GUIDED_ALT_HOLD");
+		copter.set_mode(Mode::Number::GUIDED_ALT_HOLD, ModeReason::GPS_GLITCH);
+		return; // next scheduler tick will run the new mode
+	}
+
     // start or update mission
     if (waiting_to_start) {
         // don't start the mission until we have an origin
@@ -2405,3 +2738,5 @@ float ModeAuto::get_alt_above_ground_m() const
 }
 
 #endif
+
+#endif // GPS_THREAT_DETECTOR
