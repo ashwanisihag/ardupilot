@@ -2,6 +2,7 @@
 
 def build(bld):
     vehicle = bld.path.name
+    vehicle_sources = bld.path.ant_glob(['*.S', '*.c', '*.cpp'])
     bld.ap_stlib(
         name=vehicle + '_libs',
         ap_vehicle=vehicle,
@@ -31,6 +32,7 @@ def build(bld):
     bld.ap_program(
         program_name='arducopter',
         program_groups=['bin', 'copter'],
+        source=vehicle_sources,
         use=vehicle + '_libs',
         defines=['FRAME_CONFIG=MULTICOPTER_FRAME'],
         )
@@ -38,6 +40,7 @@ def build(bld):
     bld.ap_program(
         program_name='arducopter-heli',
         program_groups=['bin', 'heli'],
+        source=vehicle_sources,
         use=vehicle + '_libs',
         defines=['FRAME_CONFIG=HELI_FRAME'],
         )
