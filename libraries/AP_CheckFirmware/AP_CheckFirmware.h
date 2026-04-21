@@ -26,6 +26,7 @@ enum class check_fw_result_t : uint8_t {
     FAIL_REASON_BAD_LENGTH_DESCRIPTOR = 16,
     FAIL_REASON_BAD_FIRMWARE_SIGNATURE = 17,
     FAIL_REASON_VERIFICATION = 18,
+    FAIL_REASON_BAD_PARTITION_HASH = 19,  // code or data partition SHA-256 mismatch
 };
 
 #if AP_CHECK_FIRMWARE_ENABLED
@@ -122,6 +123,34 @@ struct PACKED ap_secure_data {
         uint8_t key[AP_PUBLIC_KEY_LEN] = {};
     } public_key[AP_PUBLIC_KEY_MAX_KEYS];
 };
+#endif
+
+
+/*
+  Checksum registry stored in protected bootloader flash alongside public keys.
+  Holds SHA2-256 hashes of the code and data image partitions.
+  All updates require a valid manufacturer Ed25519 signature via SECURE_COMMAND.
+*/
+#define AP_CHECKSUM_REGISTRY_SIGNATURE {0x43, 0x52, 0x53, 0x75, 0x6d, 0x52, 0x65, 0x67}
+#define AP_CHECKSUM_REGISTRY_ALGO_SHA2_256 1
+
+struct PACKED ap_secure_checksum_registry {
+    uint8_t sig[8];         // AP_CHECKSUM_REGISTRY_SIGNATURE
+    uint8_t algo;           // AP_CHECKSUM_REGISTRY_ALGO_SHA2_256
+    uint8_t version;        // registry version, currently 1
+    uint8_t reserved[6];    // pad to 16-byte aligned header
+    uint8_t code_hash[32];  // SHA2-256 of code partition (flash1 region)
+    uint8_t data_hash[32];  // SHA2-256 of data partition (flash2 region)
+};
+/*
+  Local SECURE_COMMAND extensions (not yet upstreamed to MAVLink).
+  Values must not overlap with upstream ardupilotmega enum (0-7 used).
+*/
+#ifndef SECURE_COMMAND_GET_CHECKSUM_REGISTRY
+#define SECURE_COMMAND_GET_CHECKSUM_REGISTRY 8
+#endif
+#ifndef SECURE_COMMAND_SET_CHECKSUM_REGISTRY
+#define SECURE_COMMAND_SET_CHECKSUM_REGISTRY 9
 #endif
 
 #ifdef HAL_BOOTLOADER_BUILD

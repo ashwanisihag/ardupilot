@@ -12,6 +12,10 @@
 #if AP_SIGNED_FIRMWARE
 #include "../../Tools/AP_Bootloader/support.h"
 #include <string.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-declarations"
+#include "../../modules/mavlink/pymavlink/generator/C/include_v2.0/mavlink_sha256.h"
+#pragma GCC diagnostic pop
 #include "monocypher.h"
 
 const struct ap_secure_data public_keys __attribute__((section(".apsec_data")));
@@ -37,13 +41,82 @@ static bool all_zero_public_keys(void)
 /*
   check a signature against bootloader keys
  */
+
+/*
+  The checksum registry is stored in protected bootloader flash placed by the
+  linker in the .apsec_data section alongside ap_secure_data.
+*/
+const struct ap_secure_checksum_registry checksum_registry __attribute__((section(".apsec_data"))) = {};
+
+/*
+  Return true if the checksum registry sig/algo/version fields are valid.
+*/
+static bool checksum_registry_valid(void)
+{
+    const uint8_t expected_sig[8] = AP_CHECKSUM_REGISTRY_SIGNATURE;
+    return (memcmp(checksum_registry.sig, expected_sig, sizeof(expected_sig)) == 0 &&
+            checksum_registry.algo == AP_CHECKSUM_REGISTRY_ALGO_SHA2_256 &&
+            checksum_registry.version == 1);
+}
+
+/*
+  Finalize MAVLink SHA2-256 and return all 32 bytes.
+ */
+static void mavlink_sha256_final_256(mavlink_sha256_ctx *m, uint8_t result[32])
+{
+    uint32_t bit_length;
+    unsigned offset = m->sz % 64;
+
+    bit_length = m->sz * 8;
+
+    m->u.save_bytes[offset++] = 0x80;
+    if (offset > 56) {
+        memset(&m->u.save_bytes[offset], 0, 64-offset);
+        mavlink_sha256_calc(m);
+        offset = 0;
+    }
+    memset(&m->u.save_bytes[offset], 0, 60-offset);
+    m->u.save_bytes[60] = (bit_length >> 24) & 0xFF;
+    m->u.save_bytes[61] = (bit_length >> 16) & 0xFF;
+    m->u.save_bytes[62] = (bit_length >> 8) & 0xFF;
+    m->u.save_bytes[63] = (bit_length >> 0) & 0xFF;
+    mavlink_sha256_calc(m);
+
+    for (uint8_t i = 0; i < 8; i++) {
+        const uint32_t c = m->counter[i];
+        result[i*4 + 0] = (c >> 24) & 0xFF;
+        result[i*4 + 1] = (c >> 16) & 0xFF;
+        result[i*4 + 2] = (c >> 8) & 0xFF;
+        result[i*4 + 3] = (c >> 0) & 0xFF;
+    }
+}
+
+/*
+  Compute a 32-byte SHA2-256 hash over up to two contiguous flash regions.
+  region2/len2 may be nullptr/0 to hash a single region.
+*/
+static void compute_partition_hash(const uint8_t *region1, uint32_t len1,
+                                   const uint8_t *region2, uint32_t len2,
+                                   uint8_t hash_out[32])
+{
+    mavlink_sha256_ctx ctx;
+    mavlink_sha256_init(&ctx);
+    mavlink_sha256_update(&ctx, region1, len1);
+    if (region2 != nullptr && len2 > 0) {
+        mavlink_sha256_update(&ctx, region2, len2);
+    }
+    mavlink_sha256_final_256(&ctx, hash_out);
+}
+
 static check_fw_result_t check_firmware_signature(const app_descriptor_signed *ad,
                                                   const uint8_t *flash1, uint32_t len1,
                                                   const uint8_t *flash2, uint32_t len2)
 {
+#ifndef SECURITY_STRICT_PROD
     if (all_zero_public_keys()) {
         return check_fw_result_t::CHECK_FW_OK;
     }
+#endif // SECURITY_STRICT_PROD
 
     // 8 byte signature version
     static const uint64_t sig_version = 30437LLU;
@@ -121,6 +194,24 @@ static check_fw_result_t check_good_firmware_signed(void)
 
 #if AP_SIGNED_FIRMWARE
     ret = check_firmware_signature(ad, flash1, len1, flash2, len2);
+    if (ret != check_fw_result_t::CHECK_FW_OK) {
+        return ret;
+    }
+
+    // Verify code and data partition hashes against the protected registry if present.
+    if (checksum_registry_valid()) {
+        uint8_t computed_code[32];
+        uint8_t computed_data[32];
+        // code partition: flash1 region (firmware start up to image_crc1 field)
+        compute_partition_hash(flash1, len1, nullptr, 0, computed_code);
+        // data partition: flash2 region (version_major through end of image)
+        compute_partition_hash(flash2, len2, nullptr, 0, computed_data);
+
+        if (memcmp(computed_code, checksum_registry.code_hash, 32) != 0 ||
+            memcmp(computed_data, checksum_registry.data_hash, 32) != 0) {
+            return check_fw_result_t::FAIL_REASON_BAD_PARTITION_HASH;
+        }
+    }
 #endif
 
     return ret;

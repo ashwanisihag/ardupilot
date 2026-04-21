@@ -379,6 +379,97 @@ void AP_CheckFirmware::handle_secure_command(mavlink_channel_t chan, const mavli
         delete[] data;
         break;
     }
+
+    case SECURE_COMMAND_GET_CHECKSUM_REGISTRY: {
+        // Return the current checksum registry (80 bytes) so GCS can audit it.
+        const uint8_t expected_sig[8] = AP_CHECKSUM_REGISTRY_SIGNATURE;
+        const struct ap_secure_data *sec_data = find_public_keys();
+        if (sec_data == nullptr) {
+            reply.result = MAV_RESULT_FAILED;
+            goto send_reply;
+        }
+        // Locate checksum registry: it follows immediately after ap_secure_data in flash.
+        const uint8_t *flash0 = (const uint8_t *)sec_data;
+        const uint32_t page_size = hal.flash->getpagesize(0);
+        const uint32_t flash_addr = hal.flash->getpageaddr(0);
+        const uint32_t search_len = page_size - (flash0 - (const uint8_t *)flash_addr);
+        const struct ap_secure_checksum_registry *reg =
+            (const struct ap_secure_checksum_registry *)memmem(
+                flash0, search_len, expected_sig, sizeof(expected_sig));
+        if (reg == nullptr) {
+            reply.result = MAV_RESULT_FAILED;
+            goto send_reply;
+        }
+        static_assert(sizeof(struct ap_secure_checksum_registry) <= sizeof(reply.data),
+                      "checksum registry too large for reply");
+        memcpy(reply.data, reg, sizeof(struct ap_secure_checksum_registry));
+        reply.data_length = sizeof(struct ap_secure_checksum_registry);
+        reply.result = MAV_RESULT_ACCEPTED;
+        break;
+    }
+
+    case SECURE_COMMAND_SET_CHECKSUM_REGISTRY: {
+        // Manufacturer-authorized command: write code_hash + data_hash into bootloader flash.
+        // Payload: 1 byte version + 64 bytes (32 code_hash + 32 data_hash).
+        if (pkt.data_length != 1 + 64) {
+            reply.result = MAV_RESULT_FAILED;
+            goto send_reply;
+        }
+        const uint8_t incoming_version = pkt.data[0];
+        auto *bld = read_bootloader();
+        if (bld == nullptr) {
+            reply.result = MAV_RESULT_FAILED;
+            goto send_reply;
+        }
+        const uint8_t expected_sig[8] = AP_CHECKSUM_REGISTRY_SIGNATURE;
+        struct ap_secure_checksum_registry *reg =
+            (struct ap_secure_checksum_registry *)memmem(
+                bld->data1, bld->length1, expected_sig, sizeof(expected_sig));
+        if (reg == nullptr) {
+            // Registry not yet provisioned; find a zero-filled slot after ap_secure_data.
+            const uint8_t key_sig[] = AP_PUBLIC_KEY_SIGNATURE;
+            const struct ap_secure_data *sd =
+                (const struct ap_secure_data *)memmem(
+                    bld->data1, bld->length1, key_sig, sizeof(key_sig));
+            if (sd == nullptr) {
+                delete bld;
+                reply.result = MAV_RESULT_FAILED;
+                goto send_reply;
+            }
+            // Place registry immediately after ap_secure_data.
+            const uint32_t offset = (const uint8_t *)(sd + 1) - bld->data1;
+            if (offset + sizeof(struct ap_secure_checksum_registry) > bld->length1) {
+                delete bld;
+                reply.result = MAV_RESULT_FAILED;
+                goto send_reply;
+            }
+            reg = (struct ap_secure_checksum_registry *)(bld->data1 + offset);
+        } else {
+            // Anti-rollback: disallow downgrading registry version once provisioned.
+            if (incoming_version < reg->version) {
+                delete bld;
+                reply.result = MAV_RESULT_DENIED;
+                goto send_reply;
+            }
+        }
+        reg->sig[0] = 0x43; reg->sig[1] = 0x52; reg->sig[2] = 0x53; reg->sig[3] = 0x75;
+        reg->sig[4] = 0x6d; reg->sig[5] = 0x52; reg->sig[6] = 0x65; reg->sig[7] = 0x67;
+        reg->algo = AP_CHECKSUM_REGISTRY_ALGO_SHA2_256;
+        reg->version = incoming_version;
+        memset(reg->reserved, 0, sizeof(reg->reserved));
+        memcpy(reg->code_hash, &pkt.data[1],      32);
+        memcpy(reg->data_hash, &pkt.data[1 + 32], 32);
+
+        if (write_bootloader(bld)) {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Checksum registry updated OK");
+            reply.result = MAV_RESULT_ACCEPTED;
+        } else {
+            reply.result = MAV_RESULT_FAILED;
+        }
+        delete bld;
+        break;
+    }
+
     }
 
 send_reply:
