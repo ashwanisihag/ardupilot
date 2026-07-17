@@ -83,6 +83,33 @@ MAV_STATE GCS_MAVLINK_Copter::vehicle_system_status() const
 }
 
 
+// handle INTERCEPT_TARGET data from a companion computer while in INTERCEPT mode
+void GCS_MAVLINK_Copter::handle_message_intercept_target(const mavlink_message_t &msg)
+{
+    // Gate by mode (compile-safe)
+    if (copter.flightmode == nullptr || copter.flightmode->mode_number() != Mode::Number::INTERCEPT) {
+        return;
+    }
+
+    mavlink_intercept_target_t packet;
+    mavlink_msg_intercept_target_decode(&msg, &packet);
+
+    // Ignore disabled/zero packets so you never spam x=0 dist=0 q=0
+    if (packet.quality == 0) {
+        copter.intercept_target.valid = false;
+        return;
+    }
+
+    const float x_norm = constrain_float(packet.x_norm, -1.0f, 1.0f);
+    const float y_norm = constrain_float(packet.dist_m, -1.0f, 1.0f);
+
+    copter.intercept_target.quality        = packet.quality;
+    copter.intercept_target.valid          = true;
+    copter.intercept_target.x_norm         = x_norm;
+    copter.intercept_target.dist_m         = y_norm;
+    copter.intercept_target.last_update_ms = AP_HAL::millis();
+}
+
 void GCS_MAVLINK_Copter::send_attitude_target()
 {
     const Quaternion quat  = copter.attitude_control->get_attitude_target_quat();
@@ -1256,6 +1283,10 @@ void GCS_MAVLINK_Copter::handle_message(const mavlink_message_t &msg)
         handle_message_set_position_target_global_int(msg);
         break;
 #endif
+    // INTERCEPT target from companion / mouse-SITL script
+    case MAVLINK_MSG_ID_INTERCEPT_TARGET:
+        handle_message_intercept_target(msg);
+        break;
 #if AP_TERRAIN_AVAILABLE
     case MAVLINK_MSG_ID_TERRAIN_DATA:
     case MAVLINK_MSG_ID_TERRAIN_CHECK:
@@ -1421,6 +1452,7 @@ uint8_t GCS_MAVLINK_Copter::send_available_mode(uint8_t index) const
 #if MODE_AUTO_ENABLED
         &copter.mode_auto, // This auto is actually auto RTL!
         &copter.mode_auto, // This one is really is auto!
+        &copter.mode_auto_custom,
 #endif
 #if MODE_ACRO_ENABLED
         &copter.mode_acro,
@@ -1488,6 +1520,11 @@ uint8_t GCS_MAVLINK_Copter::send_available_mode(uint8_t index) const
 #if MODE_TURTLE_ENABLED
         &copter.mode_turtle,
 #endif
+        &copter.mode_poi,
+        &copter.mode_snake,
+        &copter.mode_circle_nogps,
+        &copter.mode_guided_althold,
+        &copter.mode_intercept,
     };
 
     const uint8_t base_mode_count = ARRAY_SIZE(modes);
