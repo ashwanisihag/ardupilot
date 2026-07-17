@@ -60,8 +60,11 @@ protected:
     // Resets vehicle-specific test state (not used in multirotor)
     void reset_vehicle_test_variables() override {};
 
-    // Resets vehicle-specific gain tracking state (not used in multirotor)
-    void reset_update_gain_variables() override {};
+    // Resets vehicle-specific gain tracking state
+    void reset_update_gain_variables() override {
+        step_accel = 1.0;
+        step_last_dir = 0;
+    };
 
     // Maximum/Minimum target angles for the current axis (in centidegrees)
     float target_angle_max_rp_cd() const override;
@@ -138,6 +141,10 @@ protected:
     // Timeout for a single twitch test
     uint32_t get_testing_step_timeout_ms() const override;
 
+    // number of successful iterations required to freeze at current gains.
+    // fast mode halves this to shorten the tune
+    uint8_t success_count_target() const override;
+
 private:
     // Helpers for twitch-based test monitoring
     
@@ -193,12 +200,25 @@ void updating_angle_p_up(float &tune_p, float tune_p_max, float tune_p_step_rati
     void report_axis_gains(const char* axis_string, float rate_P, float rate_I,
                            float rate_D, float angle_P, float max_accel_radss) const;
 
+    // Returns the step multiplier for the next gain adjustment and updates the
+    // acceleration state. dir is +1 for a gain increase, -1 for a decrease.
+    // In fast mode, consecutive moves in the same direction grow the step size
+    // (up to a cap) to cross large gain ranges in fewer twitches; any direction
+    // reversal resets to the standard fine step so convergence accuracy is kept.
+    // Call exactly once per gain-update event that moves a gain.
+    float step_gain(int8_t dir);
+
     // Parameters
     AP_Int8  axis_bitmask;      // Axis enable mask
     AP_Float aggressiveness;    // Target overshoot ratio (D tuning sensitivity)
     AP_Float min_d;             // Minimum allowed D gain
     AP_Float gain_backoff;      // Fraction by which tuned P and D gains are reduced after each AutoTune stage (rate loop, then angle loop) to provide additional stability margin
+    AP_Int8  fast_tune;         // 1 = accelerate gain steps and reduce confirmation twitches to shorten the tune
     bool     ignore_next;       // Skip next result (used for rate overshoot handling)
+
+    // Adaptive step acceleration state (fast mode)
+    float    step_accel = 1.0;  // current step multiplier
+    int8_t   step_last_dir;     // direction of the previous gain move (+1/-1, 0 = none)
 
     // Measurement and target values for each test step
     float target_angle;

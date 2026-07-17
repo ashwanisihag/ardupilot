@@ -47,6 +47,10 @@
 
 #define AUTOTUNE_TESTING_STEP_TIMEOUT_MS   2000U     // timeout for tuning mode's testing step
 
+#define AUTOTUNE_FAST_STEP_GROWTH          1.5f      // fast mode: step multiplier growth per consecutive same-direction move
+#define AUTOTUNE_FAST_STEP_MAX             3.0f      // fast mode: maximum step multiplier
+#define AUTOTUNE_FAST_SUCCESS_COUNT        2         // fast mode: successful iterations needed to freeze at current gains
+
 #define AUTOTUNE_RD_STEP                  0.05     // minimum increment when increasing/decreasing Rate D term
 #define AUTOTUNE_RP_STEP                  0.05     // minimum increment when increasing/decreasing Rate P term
 #define AUTOTUNE_SP_STEP                  0.05     // minimum increment when increasing/decreasing Stab P term
@@ -122,8 +126,37 @@ const AP_Param::GroupInfo AC_AutoTune_Multi::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("GMBK", 4, AC_AutoTune_Multi, gain_backoff,  0.25),
 
+    // @Param: FAST
+    // @DisplayName: AutoTune fast mode
+    // @Description: Shortens the tuning flight by growing the gain step size while successive tests keep moving a gain in the same direction (up to 3x the standard step) and by requiring 2 instead of 4 confirmation twitches per tuning stage. All abort limits and convergence checks are unchanged, but the result can be slightly coarser than a standard tune. Typically halves the number of twitches needed.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Standard
+    AP_GROUPINFO("FAST", 5, AC_AutoTune_Multi, fast_tune,  0),
+
     AP_GROUPEND
 };
+
+// number of successful iterations required to freeze at current gains
+uint8_t AC_AutoTune_Multi::success_count_target() const
+{
+    return fast_tune ? AUTOTUNE_FAST_SUCCESS_COUNT : AUTOTUNE_SUCCESS_COUNT;
+}
+
+// return step multiplier for the next gain move and update acceleration state.
+// dir: +1 = gain increase, -1 = gain decrease. See header for details.
+float AC_AutoTune_Multi::step_gain(int8_t dir)
+{
+    if (!fast_tune) {
+        return 1.0;
+    }
+    if (dir == step_last_dir) {
+        step_accel = MIN(step_accel * AUTOTUNE_FAST_STEP_GROWTH, AUTOTUNE_FAST_STEP_MAX);
+    } else {
+        step_accel = 1.0;
+    }
+    step_last_dir = dir;
+    return step_accel;
+}
 
 // constructor
 AC_AutoTune_Multi::AC_AutoTune_Multi()
@@ -138,7 +171,7 @@ void AC_AutoTune_Multi::do_gcs_announcements()
     if (now_ms - last_announce_ms < AUTOTUNE_ANNOUNCE_INTERVAL_MS) {
         return;
     }
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "AutoTune: %s %s %u%%", get_axis_name(), get_tune_type_name(), (success_counter * (100/AUTOTUNE_SUCCESS_COUNT)));
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "AutoTune: %s %s %u%%", get_axis_name(), get_tune_type_name(), (unsigned)(success_counter * 100 / success_count_target()));
     last_announce_ms = now_ms;
 }
 
@@ -908,6 +941,10 @@ void AC_AutoTune_Multi::updating_angle_p_down_all(AxisType test_axis)
 // set gains post tune for the tune type
 void AC_AutoTune_Multi::set_tuning_gains_with_backoff(AxisType test_axis)
 {
+    // reset step acceleration so the next tune type starts with fine steps
+    step_accel = 1.0;
+    step_last_dir = 0;
+
     // ensure gain_backoff has not been set outside limits
     gain_backoff.set_and_save_ifchanged(constrain_float(gain_backoff, 0.0f, 0.5f));
 
@@ -972,11 +1009,12 @@ void AC_AutoTune_Multi::updating_rate_d_up(float &tune_d, float tune_d_min, floa
     if (meas_rate_max > rate_target) {
         // if maximum measurement was higher than target
         // reduce P gain (which should reduce maximum)
-        tune_p -= tune_p * tune_p_step_ratio;
+        const float sg = step_gain(-1);
+        tune_p -= tune_p * tune_p_step_ratio * sg;
         if (tune_p < tune_p_min) {
             // P gain is at minimum so start reducing D
             tune_p = tune_p_min;
-            tune_d -= tune_d * tune_d_step_ratio;
+            tune_d -= tune_d * tune_d_step_ratio * sg;
             if (tune_d <= tune_d_min) {
                 // We have reached minimum D gain so stop tuning
                 tune_d = tune_d_min;
@@ -989,7 +1027,7 @@ void AC_AutoTune_Multi::updating_rate_d_up(float &tune_d, float tune_d_min, floa
     } else if ((meas_rate_max < rate_target * (1.0 - AUTOTUNE_D_UP_DOWN_MARGIN)) && (tune_p <= tune_p_max)) {
         // we have not achieved a high enough maximum to get a good measurement of bounce back.
         // increase P gain (which should increase maximum)
-        tune_p += tune_p * tune_p_step_ratio;
+        tune_p += tune_p * tune_p_step_ratio * step_gain(1);
         if (tune_p >= tune_p_max) {
             tune_p = tune_p_max;
             LOGGER_WRITE_EVENT(LogEvent::AUTOTUNE_REACHED_LIMIT);
@@ -1008,7 +1046,7 @@ void AC_AutoTune_Multi::updating_rate_d_up(float &tune_d, float tune_d_min, floa
                     success_counter--;
                 }
                 // increase D gain (which should increase bounce back)
-                tune_d += tune_d*tune_d_step_ratio * 2.0;
+                tune_d += tune_d*tune_d_step_ratio * 2.0 * step_gain(1);
                 // stop tuning if we hit maximum D
                 if (tune_d >= tune_d_max) {
                     tune_d = tune_d_max;
@@ -1029,11 +1067,12 @@ void AC_AutoTune_Multi::updating_rate_d_down(float &tune_d, float tune_d_min, fl
     if (meas_rate_max > rate_target) {
         // if maximum measurement was higher than target
         // reduce P gain (which should reduce maximum)
-        tune_p -= tune_p*tune_p_step_ratio;
+        const float sg = step_gain(-1);
+        tune_p -= tune_p*tune_p_step_ratio * sg;
         if (tune_p < tune_p_min) {
             // P gain is at minimum so start reducing D gain
             tune_p = tune_p_min;
-            tune_d -= tune_d*tune_d_step_ratio;
+            tune_d -= tune_d*tune_d_step_ratio * sg;
             if (tune_d <= tune_d_min) {
                 // We have reached minimum D so stop tuning
                 tune_d = tune_d_min;
@@ -1046,7 +1085,7 @@ void AC_AutoTune_Multi::updating_rate_d_down(float &tune_d, float tune_d_min, fl
     } else if ((meas_rate_max < rate_target*(1.0 - AUTOTUNE_D_UP_DOWN_MARGIN)) && (tune_p <= tune_p_max)) {
         // we have not achieved a high enough maximum to get a good measurement of bounce back.
         // increase P gain (which should increase maximum)
-        tune_p += tune_p * tune_p_step_ratio;
+        tune_p += tune_p * tune_p_step_ratio * step_gain(1);
         if (tune_p >= tune_p_max) {
             tune_p = tune_p_max;
             LOGGER_WRITE_EVENT(LogEvent::AUTOTUNE_REACHED_LIMIT);
@@ -1068,7 +1107,7 @@ void AC_AutoTune_Multi::updating_rate_d_down(float &tune_d, float tune_d_min, fl
                 success_counter--;
             }
             // decrease D gain (which should decrease bounce back)
-            tune_d -= tune_d * tune_d_step_ratio;
+            tune_d -= tune_d * tune_d_step_ratio * step_gain(-1);
             // stop tuning if we hit minimum D
             if (tune_d <= tune_d_min) {
                 tune_d = tune_d_min;
@@ -1096,7 +1135,8 @@ void AC_AutoTune_Multi::updating_rate_p_up_d_down(float &tune_d, float tune_d_mi
             success_counter--;
         }
         // Reduce D gain if bounce-back exceeds threshold.
-        tune_d -= tune_d * tune_d_step_ratio;
+        const float sg = step_gain(-1);
+        tune_d -= tune_d * tune_d_step_ratio * sg;
         // do not decrease the D term past the minimum
         if (tune_d <= tune_d_min) {
             tune_d = tune_d_min;
@@ -1108,7 +1148,7 @@ void AC_AutoTune_Multi::updating_rate_p_up_d_down(float &tune_d, float tune_d_mi
             }
         }
         // decrease P gain to match D gain reduction
-        tune_p -= tune_p * tune_p_step_ratio;
+        tune_p -= tune_p * tune_p_step_ratio * sg;
         // do not decrease the P term past the minimum
         if (tune_p <= tune_p_min) {
             tune_p = tune_p_min;
@@ -1123,7 +1163,7 @@ void AC_AutoTune_Multi::updating_rate_p_up_d_down(float &tune_d, float tune_d_mi
                 success_counter--;
             }
             // increase P gain (which should increase the maximum)
-            tune_p += tune_p * tune_p_step_ratio;
+            tune_p += tune_p * tune_p_step_ratio * step_gain(1);
             // stop tuning if we hit maximum P
             if (tune_p >= tune_p_max) {
                 tune_p = tune_p_max;
@@ -1155,7 +1195,7 @@ void AC_AutoTune_Multi::updating_angle_p_down(float &tune_p, float tune_p_min, f
             success_counter--;
         }
         // decrease P gain (which should decrease the maximum)
-        tune_p -= tune_p*tune_p_step_ratio;
+        tune_p -= tune_p*tune_p_step_ratio * step_gain(-1);
         // stop tuning if we hit maximum P
         if (tune_p <= tune_p_min) {
             tune_p = tune_p_min;
@@ -1184,7 +1224,7 @@ void AC_AutoTune_Multi::updating_angle_p_up(float &tune_p, float tune_p_max, flo
                 success_counter--;
             }
             // increase P gain (which should increase the maximum)
-            tune_p += tune_p * tune_p_step_ratio;
+            tune_p += tune_p * tune_p_step_ratio * step_gain(1);
             // stop tuning if we hit maximum P
             if (tune_p >= tune_p_max) {
                 tune_p = tune_p_max;

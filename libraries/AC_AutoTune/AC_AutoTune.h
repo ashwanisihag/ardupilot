@@ -237,6 +237,10 @@ protected:
     // get_axis_bitmask accessor
     virtual uint8_t get_axis_bitmask() const = 0;
 
+    // number of successful iterations required to freeze at current gains.
+    // subclasses may lower this to shorten the tune
+    virtual uint8_t success_count_target() const { return AUTOTUNE_SUCCESS_COUNT; }
+
     // get_testing_step_timeout_ms accessor
     virtual uint32_t get_testing_step_timeout_ms() const = 0;
 

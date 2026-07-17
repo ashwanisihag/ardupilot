@@ -475,7 +475,7 @@ void AC_AutoTune::control_attitude()
         }
 
         // If tuning step was successful, proceed to the next step
-        if (success_counter >= AUTOTUNE_SUCCESS_COUNT) {
+        if (success_counter >= success_count_target()) {
             success_counter = 0;
             step_scaler = 1.0f;
             set_tuning_gains_with_backoff(axis);
