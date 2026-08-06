@@ -335,8 +335,6 @@ AP_HW_AIRBRAIN_H743                  1209
 AP_HW_Morakot                        1210
 AP_HW_CORVON_V5                      1211
 
-AP_HW_SAAMPIXV1_2                    1208
-
 AP_HW_CSKY_PMU                       1212
 AP_HW_PilotGaeaSH7V1                 1213
 AP_HW_JPilot-C                       1214
