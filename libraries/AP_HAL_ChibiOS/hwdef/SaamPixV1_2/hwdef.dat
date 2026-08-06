@@ -1,0 +1,336 @@
+# hw definition file for processing by chibios_hwdef.py
+# for SaamPixV1_2 hardware
+#
+# Derived from the Pixhawk6C reference design. NOTE: this board uses the
+# 100-pin STM32H743VIH6 (TFBGA100), whereas Pixhawk6C uses the 176-pin
+# STM32H743IIK6. Pins on ports beyond the 100-pin bond-out (e.g. PH2) are
+# NOT available here.
+
+
+# default to all pins low to avoid ESD issues
+#DEFAULTGPIO OUTPUT LOW PULLDOWN
+
+# MCU class and specific type
+MCU STM32H7xx STM32H743xx
+
+# crystal frequency
+# X2 (PH0/PH1). Matches the Pixhawk6C reference and the schematic annotation.
+# WARNING: the X2 symbol in Pix_H_series.kicad_sch carries
+# PARTNO "NX3225SA-24.000000MHZ" (24 MHz), inherited from the shared library
+# part. If a 24 MHz crystal is actually fitted, this value is wrong and the
+# PLL will run 1.5x over spec. Verify the fitted part before flashing.
+OSCILLATOR_HZ 16000000
+
+# ChibiOS system timer
+STM32_ST_USE_TIMER 2
+
+# USB setup
+USB_VENDOR 0x1209
+USB_PRODUCT 0x4852
+USB_STRING_MANUFACTURER "Saam Drones"
+USB_STRING_PRODUCT "SaamPixV1_2 Flight Controller"
+
+# board ID. See Tools/AP_Bootloader/board_types.txt
+APJ_BOARD_ID AP_HW_SAAMPIXV1_2
+APJ_BOARD_NAME "SaamPixV1_2"
+
+FLASH_RESERVE_START_KB 128
+
+# to be compatible with the px4 bootloader we need
+# to use a different RAM_MAP
+env USE_ALT_RAM_MAP 1
+
+# flash size
+FLASH_SIZE_KB 2048
+
+
+# order of UARTs (and USB)
+SERIAL_ORDER OTG1 UART7 UART5 USART1 UART8 USART2 USART3 OTG2
+
+# USB
+PA11 OTG_FS_DM OTG1
+PA12 OTG_FS_DP OTG1
+PA9 VBUS INPUT OPENDRAIN
+
+# pins for SWD debugging
+PA13 JTMS-SWDIO SWD
+PA14 JTCK-SWCLK SWD
+
+# telem1
+PE8  UART7_TX UART7
+PE7  UART7_RX UART7
+PE9  UART7_RTS UART7 LOW PULLDOWN
+PE10 UART7_CTS UART7
+
+# telem2
+PC12 UART5_TX UART5
+PD2 UART5_RX UART5
+PC8 UART5_RTS UART5 LOW PULLDOWN
+PC9 UART5_CTS UART5
+
+# GPS1
+PB6  USART1_TX USART1
+PA10 USART1_RX USART1
+
+# GPS2
+PE1 UART8_TX UART8
+PE0 UART8_RX UART8
+
+# uart2 telem3
+PD5 USART2_TX USART2
+PA3 USART2_RX USART2
+
+# debug uart
+PD8 USART3_TX USART3
+PD9 USART3_RX USART3
+
+# USART6 is for IOMCU
+# FMU PC6 -> R38 (33R) -> IOMCU PA3 (USART2_RX)
+# FMU PC7 <- R37 (33R) <- IOMCU PA2 (USART2_TX)
+PC6 USART6_TX USART6
+PC7 USART6_RX USART6
+
+IOMCU_UART USART6
+
+# ADC
+# The power brick supplies pre-divided 0-3.3V signals; the FMU has only a
+# series protection resistor on each sense line, so SCALE(1) is correct.
+
+PC5 BATT_VOLTAGE_SENS ADC1 SCALE(1)
+PC4 BATT_CURRENT_SENS ADC1 SCALE(1)
+
+PB1 BATT2_VOLTAGE_SENS ADC1 SCALE(1)
+PA2 BATT2_CURRENT_SENS ADC1 SCALE(1)
+
+define HAL_BATT_VOLT_PIN 8
+define HAL_BATT_CURR_PIN 4
+define HAL_BATT_VOLT_SCALE 18.18
+define HAL_BATT_CURR_SCALE 36.36
+
+# 10K/10K divider (R34/R36) on the 5V rail
+PA4 VDD_5V_SENS  ADC1 SCALE(2)
+
+# SPI1 - IMUs
+PA5 SPI1_SCK SPI1
+PA6 SPI1_MISO SPI1
+PA7 SPI1_MOSI SPI1
+PC13 FMU_SPI1_CS_ICM-20602 CS
+PC14 FMU_SPI1_CS_MPU-9250 CS
+# PC15 / PE4 are the BMI055 CS+DRDY on Pixhawk6C. On this board those MCU
+# balls are routed nowhere and no BMI055 is fitted, so they stay unused.
+PE5  FMU_SPI1_DRDY_MPU-9250 INPUT
+PE6  FMU_SPI1_DRDY_ICM-20602 INPUT
+
+# SPI2 - FRAM
+PD3 SPI2_SCK SPI2
+PC2 SPI2_MISO SPI2
+PC3 SPI2_MOSI SPI2
+PD4 FRAM_CS CS
+
+# PWM output pins
+PA8  TIM1_CH1 TIM1 PWM(1) GPIO(50)
+PE11 TIM1_CH2 TIM1 PWM(2) GPIO(51)
+PE13 TIM1_CH3 TIM1 PWM(3) GPIO(52)
+PE14 TIM1_CH4 TIM1 PWM(4) GPIO(53)
+PD14 TIM4_CH3 TIM4 PWM(5) GPIO(54)
+PD15 TIM4_CH4 TIM4 PWM(6) GPIO(55)
+PA0  TIM5_CH1 TIM5 PWM(7) GPIO(56)
+PA1  TIM5_CH2 TIM5 PWM(8) GPIO(57)
+
+# CAN bus
+PD0  CAN1_RX CAN1
+PD1  CAN1_TX CAN1
+
+PB5  CAN2_RX CAN2
+PB13 CAN2_TX CAN2
+
+
+# I2C buses
+# I2C1, GPS1 connector -- ALSO carries the on-board MS5611, DPS310 and LIS3MDL
+PB7 I2C1_SDA I2C1
+PB8 I2C1_SCL I2C1
+
+# I2C2, GPS2 connector
+PB10 I2C2_SCL I2C2
+PB11 I2C2_SDA I2C2
+
+# I2C4, external I2C connector J1 (4.7K pullups R39/R40)
+PD12 I2C4_SCL I2C4
+PD13 I2C4_SDA I2C4
+
+# order of I2C buses: I2C4 -> bus 0, I2C1 -> bus 1, I2C2 -> bus 2
+I2C_ORDER I2C4 I2C1 I2C2
+
+# Unlike Pixhawk6C, this board has NO sensor-only internal I2C bus: every I2C
+# bus reaches a connector. I2C4 goes to J1, I2C2 to GPS2, and I2C1 is shared
+# between the on-board baro/mag and the GPS1 connector. Marking any bus
+# internal would cause plug-in GPS compasses on that bus to be registered as
+# internal and ignore COMPASS_ORIENT. So: no internal buses.
+define HAL_I2C_INTERNAL_MASK 0
+
+# this board is tight on DMA channels. To allow for more UART DMA we
+# disable DMA on I2C. This also prevents a problem with DMA on I2C
+# interfering with IMUs
+
+# heater
+# The board has a heater circuit on PB9 (/FMU_HEATER -> SJ1 solder jumper ->
+# R82). Left disabled: enabling it requires confirming SJ1 is bridged and the
+# heater resistor is populated.
+#PB9 HEATER_EN OUTPUT LOW GPIO(80)
+#define HAL_HEATER_GPIO_PIN 80
+#define HAL_HAVE_IMU_HEATER 1
+#define HAL_IMU_TEMP_DEFAULT 45
+#define HAL_IMUHEAT_P_DEFAULT 50
+#define HAL_IMUHEAT_I_DEFAULT 0.07
+
+# Power enable / over-current pins.
+# NOTE: on this board NONE of these are functional. Unlike Pixhawk6C, no load
+# switches are fitted -- all five nets terminate on test points only:
+#   PB2  -> TP8, PC10 -> TP2, PE2 -> TP4, PE3 -> TP5, PC11 -> TP3
+# The 3V3 sensor rail (IC2, LP5907) has its EN tied to its own input, and the
+# 5V peripheral rail is protected only by a 1A PTC (R21), not a switch. The
+# lines are kept so the pin intent is recorded, but driving them does nothing
+# and the nOC inputs will always read "no fault".
+PB2 VDD_3V3_SENSORS1_EN OUTPUT HIGH
+
+# start peripheral power on
+PC10 nVDD_5V_HIPOWER_EN OUTPUT LOW
+PE2  nVDD_5V_PERIPH_EN  OUTPUT LOW
+
+# Spektrum/DSM power is controlled by the IOMCU on this board:
+# IOMCU PC13 -> /GPIO_SPEKTRUM_PWR_EN -> J4. The IO firmware drives it via
+# HAL_GPIO_PIN_SPEKTRUM_PWR_EN, so no FMU-side pin is needed.
+# Pixhawk6C's "PH2 SPEKTRUM_PWR" was removed: PH2 does not exist on the
+# 100-pin STM32H743VIH6 (only PH0/PH1 are bonded out). The generator accepted
+# it silently and emitted PAL_LINE(GPIOH,2U), which was a dead write.
+
+# power sensing
+PE3 VDD_5V_PERIPH_nOC INPUT PULLUP
+PC11 VDD_5V_HIPOWER_nOC INPUT PULLUP
+
+PA15 VDD_BRICK_nVALID INPUT PULLUP
+PB12 VDD_BRICK2_nVALID INPUT PULLUP
+
+# microSD support
+PD6  SDMMC2_CK SDMMC2
+PD7  SDMMC2_CMD SDMMC2
+PB14 SDMMC2_D0 SDMMC2
+PB15 SDMMC2_D1 SDMMC2
+PB3  SDMMC2_D2 SDMMC2
+PB4  SDMMC2_D3 SDMMC2
+define FATFS_HAL_DEVICE SDCD2
+
+# LEDs (active low, driven open-drain)
+PD10 LED_RED OUTPUT OPENDRAIN GPIO(90) HIGH
+PD11 LED_BLUE OUTPUT OPENDRAIN GPIO(92) HIGH
+
+# setup for BoardLED2
+define AP_NOTIFY_GPIO_LED_2_ENABLED 1
+define HAL_GPIO_A_LED_PIN 90
+define HAL_GPIO_B_LED_PIN 92
+
+# ID pins
+# PC0/PC1 (/HW_REV_SENSE, /HW_VER_SENSE) are fitted with R30/R33 but board
+# revision detection is not used, so the sense pins stay disabled.
+PE12 HW_VER_REV_DRIVE OUTPUT LOW
+# PC0 HW_REV_SENS ADC1 SCALE(1)
+# PC1 HW_VER_SENS ADC1 SCALE(1)
+
+# PWM output for buzzer
+PB0 TIM3_CH3 TIM3 GPIO(77) ALARM
+
+# barometers
+# On-board MS5611 (U4) on I2C1. Its CSB pins are strapped to VDD, which per the
+# datasheet (address = 1110110 with CSB high) puts it at 0x76. PS is also
+# strapped high, selecting I2C.
+BARO MS5611 I2C:1:0x76
+
+# The board also fits a DPS310 (U5) on the SAME bus. Its address strapping
+# could not be confirmed from the schematic (the DPS310 symbol carries an
+# incorrect, EEPROM-style pin-name mapping). Confirm the SDO strap and whether
+# it collides with the MS5611 at 0x76, then enable one of these:
+#BARO DPS310 I2C:1:0x76
+#BARO DPS310 I2C:1:0x77
+
+# compass
+# Probe all known I2C compass types on all (external) buses so that whatever
+# magnetometer is in the connected GPS module is auto-detected and correctly
+# registered as EXTERNAL, which is required for COMPASS_ORIENT to be applied.
+# Pixhawk6C hard-codes "COMPASS IST8310 I2C:0:0x0C false" because on that board
+# the IST8310 is soldered to a sensor-only internal bus; that is not the case
+# here, so the hard-coded line has been removed.
+define AP_COMPASS_PROBING_ENABLED 1
+
+# The on-board LIS3MDL (MAG1, I2C1, SA1 strapped low => 0x1C, CS high => I2C)
+# is left disabled: it shares I2C1 with the GPS1 connector, so it cannot be
+# marked internal without also mis-marking a plug-in GPS compass. Note that
+# _probe_external_i2c_compasses() will find it at 0x1C and register it as
+# external. If you want it used, set COMPASS_USE for that instance to 0, or
+# instead set HAL_I2C_INTERNAL_MASK 2 and declare it explicitly:
+#COMPASS lis3mdl I2C:1:0x1C false ROTATION_NONE
+
+
+# prototypes may have no baro
+define HAL_BARO_ALLOW_INIT_NO_BARO 1
+
+# ---------------------------------------------------------
+# SPI devices & IMUs
+# ---------------------------------------------------------
+SPIDEV mpu9250  SPI1 DEVID1 FMU_SPI1_CS_MPU-9250  MODE3 500*KHZ 4*MHZ
+SPIDEV icm20602 SPI1 DEVID2 FMU_SPI1_CS_ICM-20602 MODE3   2*MHZ 8*MHZ
+SPIDEV ramtron  SPI2 DEVID1 FRAM_CS MODE3  8*MHZ  8*MHZ
+
+# 2 IMUs. Both are populated (U2 = MPU-9250, IC5 = ICM-20602) and were wired
+# with independent CS and DRDY lines, so both are enabled for redundancy.
+#
+# ROTATIONS derived from the PCB geometry, with vehicle FORWARD = the -X end of
+# the board (the USB / GPS end, opposite the STM32F103 IOMCU).
+#
+# Board frame, viewed from the top (component side, both IMUs are on F.Cu):
+#   forward = screen left, right = screen up, down = into the board
+#
+# U2  MPU-9250  placed at 0 deg; pad 1 sits at the top-left corner with pins
+#     1-6 running down the left edge, i.e. the InvenSense datasheet-native
+#     orientation. Sensor +X = screen right, +Y = screen up, +Z out of the
+#     board top  =>  (Sx,Sy,Sz) -> (-Sx, Sy, -Sz)  =  ROTATION_PITCH_180
+#
+# IC5 ICM-20602 placed at 180 deg, but its footprint is drawn with pad 1 at the
+#     bottom-left, so the package ends up 90 deg clockwise from datasheet-native
+#     (pad 1 lands top-right, pads 1-5 running left along the top edge).
+#     Sensor +X = screen down, +Y = screen right, +Z out of the board top
+#     =>  (Sx,Sy,Sz) -> (-Sy, -Sx, -Sz)  =  ROTATION_ROLL_180_YAW_270
+#
+# NOTE the two are 90 deg apart, not 180 -- the raw KiCad placement angles
+# differ by 180 only because the two footprints have different pad-1 corners.
+#
+# The one input not taken from the design files is the InvenSense axis
+# convention (top view, pin 1 upper-left, +X right, +Y up, +Z out of the
+# package top), which is common to both parts. Confirm on the bench.
+IMU Invensense SPI:mpu9250  ROTATION_PITCH_180
+IMU Invensense SPI:icm20602 ROTATION_ROLL_180_YAW_270
+#----------------------------------------------------------------
+
+
+define HAL_DEFAULT_INS_FAST_SAMPLE 3
+
+# enable RAMTRON parameter storage
+define HAL_USE_EMPTY_STORAGE 1
+define HAL_STORAGE_SIZE 32768
+define HAL_WITH_RAMTRON 1
+
+# safety switch is provided by the IOMCU (IOMCU PB5 <- SW3 / GPA_PORT1)
+define HAL_HAVE_SAFETY_SWITCH 1
+
+DMA_PRIORITY SDMMC* USART6* ADC* UART* USART* SPI* TIM*
+
+# enable FAT filesystem support (needs a microSD defined via SDMMC)
+define HAL_OS_FATFS_IO 1
+
+ROMFS io_firmware.bin Tools/IO_Firmware/iofirmware_f103_lowpolh.bin
+
+# build ABIN for flash-from-bootloader support:
+env BUILD_ABIN True
+
+# enable support for dshot on iomcu
+ROMFS io_firmware_dshot.bin Tools/IO_Firmware/iofirmware_f103_dshot_lowpolh.bin
+define HAL_WITH_IO_MCU_BIDIR_DSHOT 1
