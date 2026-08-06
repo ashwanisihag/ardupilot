@@ -27,6 +27,7 @@
 extern AP_IOMCU iomcu;
 #endif
 #include <AP_Scripting/AP_Scripting.h>
+#include <SITL/SITL.h>
 
 #define SCHED_TASK(func, rate_hz, max_time_micros, prio) SCHED_TASK_CLASS(AP_Vehicle, &vehicle, func, rate_hz, max_time_micros, prio)
 
@@ -193,6 +194,8 @@ const AP_Param::GroupInfo AP_Vehicle::var_info[] = {
     // @Bitmask{Plane}: 17:QLOITER
     // @Bitmask{Plane}: 18:QACRO
     // @Bitmask{Plane}: 19:QAUTOTUNE
+    // @Bitmask{Plane}: 20:Loiter to QLand
+    // @Bitmask{Plane}: 21:Autoland
     // @Bitmask{Rover}: 0:Manual
     // @Bitmask{Rover}: 1:Acro
     // @Bitmask{Rover}: 2:Steering
@@ -288,6 +291,12 @@ const AP_Param::GroupInfo AP_Vehicle::var_info[] = {
     // @Path: ../AP_RPM/AP_RPM.cpp
     AP_SUBGROUPINFO(rpm_sensor, "RPM", 32, AP_Vehicle, AP_RPM),
 #endif
+
+#if AP_BEACON_ENABLED
+    // @Group: BCN
+    // @Path: ../AP_Beacon/AP_Beacon.cpp
+    AP_SUBGROUPINFO(beacon, "BCN", 33, AP_Vehicle, AP_Beacon),
+#endif  // AP_BEACON_ENABLED
 
     AP_GROUPEND
 };
@@ -425,6 +434,11 @@ void AP_Vehicle::setup()
     AP::gripper().init();
 #endif
 
+    // init beacons used for non-gps position estimation
+#if AP_BEACON_ENABLED
+    beacon.init();
+#endif  // AP_BEACON_ENABLED
+
     // init_ardupilot is where the vehicle does most of its initialisation.
     init_ardupilot();
 
@@ -531,6 +545,10 @@ void AP_Vehicle::setup()
     rpm_sensor.init();
 #endif
 
+#if AP_ARMING_ENABLED
+    AP::arming().init();
+#endif
+
     // invalidate count in case an enable parameter changed during
     // initialisation
     AP_Param::invalidate_count();
@@ -614,6 +632,9 @@ const AP_Scheduler::Task AP_Vehicle::scheduler_tasks[] = {
 #if HAL_GYROFFT_ENABLED
     FAST_TASK_CLASS(AP_GyroFFT,    &vehicle.gyro_fft,       sample_gyros),
 #endif
+#if AP_BEACON_ENABLED
+    SCHED_TASK_CLASS(AP_Beacon,    &vehicle.beacon,         update,                  400, 200, 24),
+#endif  // AP_BEACON_ENABLED
 #if AP_AIRSPEED_ENABLED
     SCHED_TASK_CLASS(AP_Airspeed,  &vehicle.airspeed,       update,                   10, 100, 41),    // NOTE: the priority number here should be right before Plane's calc_airspeed_errors
 #endif
@@ -977,10 +998,6 @@ void AP_Vehicle::reboot(bool hold_in_bootloader)
 void AP_Vehicle::publish_osd_info()
 {
 #if AP_MISSION_ENABLED
-    AP_Mission *mission = AP::mission();
-    if (mission == nullptr) {
-        return;
-    }
     AP_OSD *osd = AP::osd();
     if (osd == nullptr) {
         return;
@@ -997,7 +1014,7 @@ void AP_Vehicle::publish_osd_info()
     if (!get_wp_crosstrack_error_m(nav_info.wp_xtrack_error)) {
         return;
     }
-    nav_info.wp_number = mission->get_current_nav_index();
+    nav_info.wp_number = AP::mission().get_current_nav_index();
     osd->set_nav_info(nav_info);
 #endif
 }
@@ -1098,6 +1115,18 @@ void AP_Vehicle::one_Hz_update(void)
 #endif
 #endif
 
+#if HAL_GCS_ENABLED
+    // Check if available modes have changed
+    const uint32_t available_mode_enabled_mask = get_available_mode_enabled_mask();
+    if (available_mode_enabled_mask != last_available_mode_enabled_mask) {
+        if (last_available_mode_enabled_mask != 0) {
+            // Last value is only zero at init, track changes after that
+            gcs().available_modes_changed();
+        }
+        last_available_mode_enabled_mask = available_mode_enabled_mask;
+    }
+#endif
+
 }
 
 void AP_Vehicle::check_motor_noise()
@@ -1133,6 +1162,47 @@ void AP_Vehicle::check_motor_noise()
     }
 #endif
 }
+
+#if HAL_WITH_ESC_TELEM && (APM_BUILD_COPTER_OR_HELI || APM_BUILD_TYPE(APM_BUILD_ArduPlane))
+bool AP_Vehicle::motors_takeoff_check(float rpm_min, float rpm_max)
+{
+    auto motors = AP::motors();
+
+    // Allow takeoff if check is disabled or if no motor class is present
+    if (rpm_min <= 0 || motors == nullptr) {
+        return true;
+    }
+
+    // clear warning timer when disarmed
+    uint32_t now_ms = AP_HAL::millis();
+    if (!motors->armed()) {
+        takeoff_check_state.warning_ms = now_ms;
+        return false;
+    }
+
+    // check ESCs are sending RPM at expected level
+    uint32_t motor_mask = motors->get_motor_mask();
+    const bool telem_active = AP::esc_telem().is_telemetry_active(motor_mask);
+    const bool rpm_adequate = AP::esc_telem().are_motors_running(motor_mask, rpm_min, rpm_max);
+
+    // if RPM is at the expected level clear block
+    if (telem_active && rpm_adequate) {
+        return true;
+    }
+
+    // warn the user every 2 seconds that telemetry is inactive or rpm is inadequate
+    if (now_ms - takeoff_check_state.warning_ms > 2000) {
+        takeoff_check_state.warning_ms = now_ms;
+        const char* prefix_str = "Takeoff blocked:";
+        if (!telem_active) {
+            gcs().send_text(MAV_SEVERITY_CRITICAL, "%s waiting for ESC RPM", prefix_str);
+        } else if (!rpm_adequate) {
+            gcs().send_text(MAV_SEVERITY_CRITICAL, "%s ESC RPM out of range", prefix_str);
+        }
+    }
+    return false;
+}
+#endif  // HAL_WITH_ESC_TELEM && (APM_BUILD_COPTER_OR_HELI || APM_BUILD_TYPE(APM_BUILD_ArduPlane))
 
 #if AP_DDS_ENABLED
 bool AP_Vehicle::init_dds_client()

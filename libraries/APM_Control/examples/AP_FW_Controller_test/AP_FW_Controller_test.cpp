@@ -103,7 +103,7 @@ bool disable_integrator = false;
 float calc_speed_scaler()
 {
     float aspeed;
-    if (!ahrs.airspeed_estimate(aspeed)) {
+    if (!ahrs.airspeed_EAS(aspeed)) {
         return 1.0;
     }
 
@@ -144,7 +144,7 @@ void setup()
 
             char cmd[20] {};
             strncpy(cmd, arg, eq-arg);
-            const float value = atof(eq+1);
+            const float value = strtof(eq+1, nullptr);
             if (strcmp(cmd, "axis") == 0) {
                 if (strcmp(eq+1, "roll") == 0) {
                     test_axis = Axis::Roll;
@@ -223,7 +223,7 @@ void setup()
 
     // Print AHRS state
     float airspeed = -1;
-    bool airspeed_ok = ahrs.airspeed_estimate(airspeed);
+    bool airspeed_ok = ahrs.airspeed_EAS(airspeed);
     ::printf("AHRS - roll: %f, pitch: %f, airspeed: %f, airspeed OK: %i, EAS2TAS %f, gyro: { %f, %f, %f }\n", ahrs.get_roll_deg(), ahrs.get_pitch_deg(), airspeed, airspeed_ok, ahrs.get_EAS2TAS(), ahrs.get_gyro().x, ahrs.get_gyro().y, ahrs.get_gyro().z);
 
     // Header for results
@@ -248,13 +248,13 @@ void loop(void)
     switch (test_axis) {
         case Axis::Roll:
             angle_error_cd = nav_angle_cd - ahrs.roll_sensor;
-            output = roll_control.get_servo_out(angle_error_cd, speed_scaler, disable_integrator, ground_mode);
+            output = roll_control.run_angle_control(nav_angle_cd, speed_scaler, disable_integrator, ground_mode);
             info = &roll_control.get_pid_info();
             break;
 
         case Axis::Pitch:
             angle_error_cd = nav_angle_cd - ahrs.pitch_sensor;
-            output = pitch_control.get_servo_out(angle_error_cd, speed_scaler, disable_integrator, ground_mode);
+            output = pitch_control.run_angle_control(nav_angle_cd, speed_scaler, disable_integrator, ground_mode);
             info = &pitch_control.get_pid_info();
             break;
     }

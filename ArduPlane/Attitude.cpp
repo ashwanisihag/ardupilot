@@ -8,7 +8,7 @@
 float Plane::calc_speed_scaler(void)
 {
     float aspeed, speed_scaler;
-    if (ahrs.airspeed_estimate(aspeed)) {
+    if (ahrs.airspeed_EAS(aspeed)) {
         if (aspeed > auto_state.highest_airspeed && arming.is_armed_and_safety_off()) {
             auto_state.highest_airspeed = aspeed;
         }
@@ -130,16 +130,19 @@ bool Plane::stick_mixing_enabled(void)
 void Plane::stabilize_roll()
 {
     if (fly_inverted()) {
-        // we want to fly upside down. We need to cope with wrap of
-        // the roll_sensor interfering with wrap of nav_roll, which
-        // would really confuse the PID code. The easiest way to
-        // handle this is to ensure both go in the same direction from
-        // zero
         nav_roll_cd += 18000;
-        if (ahrs.roll_sensor < 0) nav_roll_cd -= 36000;
     }
+    float roll_out = stabilize_roll_get_roll_out();
 
-    const float roll_out = stabilize_roll_get_roll_out();
+#if AP_PLANE_SYSTEMID_ENABLED
+    const auto &systemid = plane.g2.systemid;
+    if (systemid.is_running_fw()) {
+        Vector3f offset;
+        offset = systemid.get_output_offset();
+        roll_out += offset.x * 100.0f;
+    }
+#endif 
+
     SRV_Channels::set_output_scaled(SRV_Channel::k_aileron, roll_out);
 }
 
@@ -156,11 +159,11 @@ float Plane::stabilize_roll_get_roll_out()
             const float mc_angR = quadplane.attitude_control->get_angle_roll_p().kP()
                 * quadplane.attitude_control->get_last_angle_P_scale().x;
             if (is_positive(mc_angR)) {
-                rollController.set_ff_scale(MIN(1.0, 1.0 / (mc_angR * rollController.tau())));
+                rollController.set_ff_scale(MIN(1.0, rollController.get_angle_p() / mc_angR));
             }
         }
 
-        const float roll_out = rollController.get_rate_out(degrees(pid_info.target), speed_scaler);
+        const float roll_out = rollController.run_rate_control(degrees(pid_info.target), speed_scaler);
         /* when slaving fixed wing control to VTOL control we need to decay the integrator to prevent
            opposing integrators balancing between the two controllers
         */
@@ -173,7 +176,7 @@ float Plane::stabilize_roll_get_roll_out()
     if (control_mode == &mode_stabilize && channel_roll->get_control_in() != 0) {
         disable_integrator = true;
     }
-    return rollController.get_servo_out(nav_roll_cd - ahrs.roll_sensor, speed_scaler, disable_integrator,
+    return rollController.run_angle_control(nav_roll_cd, speed_scaler, disable_integrator,
                                         ground_mode && !(plane.flight_option_enabled(FlightOptions::DISABLE_GROUND_PID_SUPPRESSION)));
 }
 
@@ -192,7 +195,17 @@ void Plane::stabilize_pitch()
         return;
     }
 
-    const float pitch_out = stabilize_pitch_get_pitch_out();
+    float pitch_out = stabilize_pitch_get_pitch_out();
+
+#if AP_PLANE_SYSTEMID_ENABLED
+    const auto &systemid = plane.g2.systemid;
+    if (systemid.is_running_fw()) {
+        Vector3f offset;
+        offset = systemid.get_output_offset();
+        pitch_out += offset.y * 100.0f;
+    }
+#endif 
+
     SRV_Channels::set_output_scaled(SRV_Channel::k_elevator, pitch_out);
 }
 
@@ -209,11 +222,11 @@ float Plane::stabilize_pitch_get_pitch_out()
             const float mc_angP = quadplane.attitude_control->get_angle_pitch_p().kP()
                 * quadplane.attitude_control->get_last_angle_P_scale().y;
             if (is_positive(mc_angP)) {
-                pitchController.set_ff_scale(MIN(1.0, 1.0 / (mc_angP * pitchController.tau())));
+                pitchController.set_ff_scale(MIN(1.0, pitchController.get_angle_p() / mc_angP));
             }
         }
 
-        const int32_t pitch_out = pitchController.get_rate_out(degrees(pid_info.target), speed_scaler);
+        const int32_t pitch_out = pitchController.run_rate_control(degrees(pid_info.target), speed_scaler);
         /* when slaving fixed wing control to VTOL control we need to decay the integrator to prevent
            opposing integrators balancing between the two controllers
         */
@@ -246,7 +259,7 @@ float Plane::stabilize_pitch_get_pitch_out()
         demanded_pitch = landing.get_pitch_cd();
     }
 
-    return pitchController.get_servo_out(demanded_pitch - ahrs.pitch_sensor, speed_scaler, disable_integrator,
+    return pitchController.run_angle_control(demanded_pitch, speed_scaler, disable_integrator,
                                          ground_mode && !(plane.flight_option_enabled(FlightOptions::DISABLE_GROUND_PID_SUPPRESSION)));
 }
 
@@ -417,6 +430,12 @@ void Plane::stabilize()
     }
 #endif
 
+#if AP_PLANE_SYSTEMID_ENABLED
+    if (plane.g2.systemid.is_running_fw()) {
+        plane.g2.systemid.fw_update();
+    }
+#endif
+
     if (now - last_stabilize_ms > 2000) {
         // if we haven't run the rate controllers for 2 seconds then reset
         control_mode->reset_controllers();
@@ -430,8 +449,8 @@ void Plane::stabilize()
     } else if (nav_scripting_active()) {
         // scripting is in control of roll and pitch rates and throttle
         const float speed_scaler = get_speed_scaler();
-        const float aileron = rollController.get_rate_out(nav_scripting.roll_rate_dps, speed_scaler);
-        const float elevator = pitchController.get_rate_out(nav_scripting.pitch_rate_dps, speed_scaler);
+        const float aileron = rollController.run_rate_control(nav_scripting.roll_rate_dps, speed_scaler);
+        const float elevator = pitchController.run_rate_control(nav_scripting.pitch_rate_dps, speed_scaler);
         SRV_Channels::set_output_scaled(SRV_Channel::k_aileron, aileron);
         SRV_Channels::set_output_scaled(SRV_Channel::k_elevator, elevator);
         float rudder = 0;
@@ -735,4 +754,42 @@ void Plane::apply_load_factor_roll_limits(void)
 
     nav_roll_cd = constrain_int32(nav_roll_cd, -lf_roll_limit_deg * 100, lf_roll_limit_deg * 100);
     roll_limit_cd = MIN(roll_limit_cd, lf_roll_limit_deg * 100);
+}
+
+// Check if there has been a change in attitude estimate which the attitude controllers should be told about
+// This allows them to compensate for the change so smooth control is maintained
+void Plane::check_ahrs_reset()
+{
+    bool should_reset = false;
+
+    // Check for yaw reset
+    const uint16_t new_yaw_reset_count = ahrs.get_yaw_reset_count();
+    if (ahrs_check.ahrs_yaw_reset_count != new_yaw_reset_count) {
+        should_reset = true;
+        ahrs_check.ahrs_yaw_reset_count = new_yaw_reset_count;
+    }
+
+    // check for change in primary EKF, or EKF lane.
+    const uint16_t new_reset_count = ahrs.get_last_attitude_reset_count();
+    if (new_reset_count != ahrs_check.attitude_reset_count) {
+        should_reset = true;
+        ahrs_check.attitude_reset_count = new_reset_count;
+    }
+
+    // Nothing to do if there are no resets
+    if (!should_reset) {
+        return;
+    }
+
+    // Reset fixed wing controllers
+    rollController.ahrs_reset();
+    pitchController.ahrs_reset();
+
+#if HAL_QUADPLANE_ENABLED
+    // Reset vtol controllers
+    if (quadplane.initialised) {
+        quadplane.attitude_control->inertial_frame_reset();
+    }
+#endif
+
 }

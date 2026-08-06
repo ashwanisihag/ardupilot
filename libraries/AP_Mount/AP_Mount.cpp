@@ -12,7 +12,7 @@
 #include "AP_Mount_Alexmos.h"
 #include "AP_Mount_SToRM32.h"
 #include "AP_Mount_SToRM32_serial.h"
-#include "AP_Mount_Gremsy.h"
+#include "AP_Mount_MAVLink.h"
 #include "AP_Mount_Siyi.h"
 #include "AP_Mount_Scripting.h"
 #include "AP_Mount_Xacti.h"
@@ -112,13 +112,13 @@ void AP_Mount::init()
             break;
 #endif
 
-#if HAL_MOUNT_GREMSY_ENABLED
-        // check for Gremsy mounts
-        case Type::Gremsy:
-            _backends[instance] = NEW_NOTHROW AP_Mount_Gremsy(*this, _params[instance], instance);
+#if HAL_MOUNT_MAVLINK_ENABLED
+        // check for MAVLink mounts
+        case Type::MAVLink:
+            _backends[instance] = NEW_NOTHROW AP_Mount_MAVLink(*this, _params[instance], instance);
             _num_instances++;
             break;
-#endif // HAL_MOUNT_GREMSY_ENABLED
+#endif // HAL_MOUNT_MAVLINK_ENABLED
 
 #if HAL_MOUNT_SERVO_ENABLED
         // check for BrushlessPWM mounts (uses Servo backend)
@@ -302,6 +302,33 @@ void AP_Mount::set_yaw_lock(uint8_t instance, bool yaw_lock)
     backend->set_yaw_lock(yaw_lock);
 }
 
+// set roll_lock used in RC_TARGETING mode.  If true, the gimbal's roll target is maintained in earth-frame
+// If false (aka "follow") the gimbal's roll is maintained in body-frame meaning it will rotate with the vehicle
+void AP_Mount::set_roll_lock(uint8_t instance, bool roll_lock)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+
+    // call backend's set_roll_lock
+    backend->set_roll_lock(roll_lock);
+}
+
+// set pitch_lock used in RC_TARGETING mode.  If true, the gimbal's tilt target is maintained in earth-frame
+// If false (aka "follow") the gimbal's tilt is maintained in body-frame meaning it will tilt with the vehicle
+void AP_Mount::set_pitch_lock(uint8_t instance, bool pitch_lock)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+
+    // call backend's set_pitch_lock
+    backend->set_pitch_lock(pitch_lock);
+}
+
+
 // set angle target in degrees
 // roll and pitch are in earth-frame
 // yaw_is_earth_frame (aka yaw_lock) should be true if yaw angle is earth-frame, false if body-frame
@@ -354,16 +381,7 @@ MAV_RESULT AP_Mount::handle_command_do_mount_control(const mavlink_command_int_t
 
 MAV_RESULT AP_Mount::handle_command_do_gimbal_manager_pitchyaw(const mavlink_command_int_t &packet)
 {
-    AP_Mount_Backend *backend;
-
-    // check gimbal device id.  0 is primary, 1 is 1st gimbal, 2 is
-    // 2nd gimbal, etc
-    const uint8_t instance = packet.z;
-    if (instance == 0) {
-        backend = get_primary();
-    } else {
-        backend = get_instance(instance - 1);
-    }
+    auto *backend = mount_device_from_mavlink_gimbal_id(packet.z);
 
     if (backend == nullptr) {
         return MAV_RESULT_FAILED;
@@ -411,15 +429,7 @@ MAV_RESULT AP_Mount::handle_command_do_gimbal_manager_pitchyaw(const mavlink_com
 // handle mav_cmd_do_gimbal_manager_configure for deconflicting different mavlink message senders
 MAV_RESULT AP_Mount::handle_command_do_gimbal_manager_configure(const mavlink_command_int_t &packet, const mavlink_message_t &msg)
 {
-    AP_Mount_Backend *backend;
-
-    // check gimbal device id.  0 is primary, 1 is 1st gimbal, 2 is 2nd gimbal, etc
-    const uint8_t instance = packet.z;
-    if (instance == 0) {
-        backend = get_primary();
-    } else {
-        backend = get_instance(instance - 1);
-    }
+    auto *backend = mount_device_from_mavlink_gimbal_id(packet.z);
 
     if (backend == nullptr) {
         return MAV_RESULT_FAILED;
@@ -428,20 +438,12 @@ MAV_RESULT AP_Mount::handle_command_do_gimbal_manager_configure(const mavlink_co
     return backend->handle_command_do_gimbal_manager_configure(packet, msg);
 }
 
-void AP_Mount::handle_gimbal_manager_set_attitude(const mavlink_message_t &msg) {
+void AP_Mount::handle_gimbal_manager_set_attitude(const mavlink_message_t &msg)
+{
     mavlink_gimbal_manager_set_attitude_t packet;
     mavlink_msg_gimbal_manager_set_attitude_decode(&msg,&packet);
 
-    AP_Mount_Backend *backend;
-
-    // check gimbal device id.  0 is primary, 1 is 1st gimbal, 2 is
-    // 2nd gimbal, etc
-    const uint8_t instance = packet.gimbal_device_id;
-    if (instance == 0) {
-        backend = get_primary();
-    } else {
-        backend = get_instance(instance - 1);
-    }
+    auto *backend = mount_device_from_mavlink_gimbal_id(packet.gimbal_device_id);
 
     if (backend == nullptr) {
         return;
@@ -464,7 +466,7 @@ void AP_Mount::handle_gimbal_manager_set_attitude(const mavlink_message_t &msg) 
     const Vector3f att_rate_degs {
         packet.angular_velocity_x,
         packet.angular_velocity_y,
-        packet.angular_velocity_y
+        packet.angular_velocity_z
     };
 
     // ensure that we are only demanded to a specific attitude or to
@@ -498,16 +500,7 @@ void AP_Mount::handle_gimbal_manager_set_pitchyaw(const mavlink_message_t &msg)
     mavlink_gimbal_manager_set_pitchyaw_t packet;
     mavlink_msg_gimbal_manager_set_pitchyaw_decode(&msg,&packet);
 
-    AP_Mount_Backend *backend;
-
-    // check gimbal device id.  0 is primary, 1 is 1st gimbal, 2 is
-    // 2nd gimbal, etc
-    const uint8_t instance = packet.gimbal_device_id;
-    if (instance == 0) {
-        backend = get_primary();
-    } else {
-        backend = get_instance(instance - 1);
-    }
+    auto *backend = mount_device_from_mavlink_gimbal_id(packet.gimbal_device_id);
 
     if (backend == nullptr) {
         return;
@@ -641,6 +634,42 @@ bool AP_Mount::get_poi(uint8_t instance, Quaternion &quat, Location &loc, Locati
 }
 #endif
 
+#if AP_MOUNT_POI_LOCK_ENABLED
+// lock currently viewed GPS point and switch to GPS Targeting mode
+void AP_Mount::set_poi_lock(uint8_t instance)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+
+    // call backend's set_poi_lock
+    backend->set_poi_lock();
+}
+
+void AP_Mount::clear_poi_lock(uint8_t instance)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+
+    // call backend's clear_poi_lock
+    backend->clear_poi_lock();
+}
+
+void AP_Mount::suspend_poi_lock(uint8_t instance)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+
+    // call backend's suspend_poi_lock
+    backend->suspend_poi_lock();
+}
+#endif // AP_MOUNT_POI_LOCK_ENABLED
+
 // get attitude as a quaternion.  returns true on success.
 // att_quat will be an earth-frame quaternion rotated such that
 // yaw is in body-frame.
@@ -699,6 +728,7 @@ bool AP_Mount::pre_arm_checks(char *failure_msg, uint8_t failure_msg_len)
     return true;
 }
 
+#if AP_SCRIPTING_ENABLED
 // get target rate in deg/sec. returns true on success
 bool AP_Mount::get_rate_target(uint8_t instance, float& roll_degs, float& pitch_degs, float& yaw_degs, bool& yaw_is_earth_frame)
 {
@@ -719,7 +749,7 @@ bool AP_Mount::get_angle_target(uint8_t instance, float& roll_deg, float& pitch_
     return backend->get_angle_target(roll_deg, pitch_deg, yaw_deg, yaw_is_earth_frame);
 }
 
-// accessors for scripting backends and logging
+// get mount target location. returns true on success
 bool AP_Mount::get_location_target(uint8_t instance, Location& target_loc)
 {
     auto *backend = get_instance(instance);
@@ -728,7 +758,9 @@ bool AP_Mount::get_location_target(uint8_t instance, Location& target_loc)
     }
     return backend->get_location_target(target_loc);
 }
+#endif
 
+// accessory for scripting backends and logging
 void AP_Mount::set_attitude_euler(uint8_t instance, float roll_deg, float pitch_deg, float yaw_bf_deg)
 {
     auto *backend = get_instance(instance);
@@ -737,6 +769,17 @@ void AP_Mount::set_attitude_euler(uint8_t instance, float roll_deg, float pitch_
     }
     backend->set_attitude_euler(roll_deg, pitch_deg, yaw_bf_deg);
 }
+
+#if AP_SCRIPTING_ENABLED
+void AP_Mount::set_natively_supported_mount_target_types(uint8_t instance, uint8_t types_mask)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+    backend->set_natively_supported_mount_target_types(types_mask);
+}
+#endif  // AP_SCRIPTING_ENABLED
 
 #if HAL_LOGGING_ENABLED
 // write mount log packet for all backends
@@ -767,7 +810,7 @@ void AP_Mount::set_target_sysid(uint8_t instance, uint8_t sysid)
     if (backend == nullptr) {
         return;
     }
-    // call instance's set_roi_cmd
+    // call instance's set target SYSID cmd
     backend->set_target_sysid(sysid);
 }
 
@@ -790,6 +833,17 @@ void AP_Mount::clear_roi_target(uint8_t instance)
     }
     backend->clear_roi_target();
 }
+
+#if AP_MOUNT_ROI_WPNEXT_OFFSET_ENABLED
+void AP_Mount::set_roi_target_wpnext_offset(uint8_t instance, const Vector3f &rpy)
+{
+    auto *backend = get_instance(instance);
+    if (backend == nullptr) {
+        return;
+    }
+    backend->set_roi_target_wpnext_offset(rpy);
+}
+#endif  // AP_MOUNT_ROI_WPNEXT_OFFSET_ENABLED
 
 //
 // camera controls for gimbals that include a camera
@@ -956,6 +1010,19 @@ AP_Mount_Backend *AP_Mount::get_instance(uint8_t instance) const
         return nullptr;
     }
     return _backends[instance];
+}
+
+// This is the mapping between gimbal_device_id (defined by MAVLink) and actual devices (aka 'instances', 'backends')
+AP_Mount_Backend *AP_Mount::mount_device_from_mavlink_gimbal_id(uint8_t gimbal_device_id) const
+{
+    // FIXME: This function's behavior when gimbal_device_id == 0 is a bug. (That should indicate 'all mounts', not 'primary'.)
+    // Affects: Users working with multiple mounts.
+    // Workaround: Leave this as-is until it can be fixed in synchrony with upstream to prevent unexpected behavior-change.
+    // See: https://github.com/ArduPilot/ardupilot/issues/31940
+    if (gimbal_device_id == 0) {
+        return get_primary();
+    }
+    return get_instance(gimbal_device_id - 1);
 }
 
 // pass a GIMBAL_REPORT message to the backend

@@ -1,160 +1,165 @@
 # SaamPixV1_1
 
-SaamPixV1_1 is an STM32F427-based flight controller with dual SPI IMUs, onboard barometer and compasses, CAN, SD card, and RAMTRON parameter storage. Public Saam Drones product material describes the board as a high-performance open-source controller for multirotor, fixed-wing, VTOL, and hybrid UAV applications.
+The SaamPixV1_1 is an STM32F427-based flight controller produced by
+[Saam Drones](https://www.saamdrones.com/). It features dual SPI IMUs,
+an onboard barometer, dual compasses, CAN, microSD logging, and
+RAMTRON parameter storage. All 16 PWM outputs are driven directly by
+the FMU (no separate IO co-processor), which suits VTOL and other
+multi-actuator airframes. It supports multirotor, fixed-wing, VTOL,
+and hybrid UAV applications.
 
-## Overview
+![SaamPixV1_1 Board](SaamPixV1_1-board.jpg)
 
-- MCU: STM32F427xx
-- CPU: ARM Cortex-M4 with FPU at 168 MHz
-- Flash: 2048 KB
+## Features/Specifications
+
+- MCU: STM32F427xx ARM Cortex-M4 with FPU at 168 MHz
+- Flash: 2048 KB internal
 - SRAM: 256 KB
-- Bootloader reserve: 16 KB
-- Oscillator: 8 MHz
-- Board ID token: `AP_HW_SAAMPIXV1_1`
-- APJ board name: `SaamPixV1_1`
-- USB manufacturer string: `Saam Drones`
-- USB product string: `SaamPixV1_1 Flight Controller`
-- Storage: RAMTRON (`HAL_WITH_RAMTRON 1`)
-- Filesystem: FATFS enabled
-- Safety switch: disabled by default (`HAL_HAVE_SAFETY_SWITCH 0`)
+- IMU 1: ICM20602
+- IMU 2: MPU9250 (with onboard AK8963 compass)
+- Barometer: MS5611
+- Compass 1: LIS3MDL (external SPI)
+- Compass 2: AK8963 (via MPU9250)
+- RAMTRON parameter storage (16 KB)
+- MicroSD card (SDIO interface)
+- CAN bus: 1x CAN1
+- UARTs: 6 (USART1, USART2, USART3, UART4, UART7, UART8)
+  - USB OTG
+- I2C: 2 buses (I2C1, I2C2)
+- PWM Outputs: 16 channels
+- RC Input: PPM, SBUS, DSM/DSM2/DSMX via dedicated pin or
+  UART
+- USB: micro-USB (OTG1)
+- Safety switch: not present
 
-## Sensors
+## Where to Buy
 
-- IMU 1: ICM20602 on SPI4, rotation `ROLL_180_YAW_90`
-- IMU 2: MPU9250 on SPI4, rotation `ROLL_180_YAW_90`
-- Barometer: MS5611 on SPI4
-- Compass 1: LIS3MDL on SPI4
-- Compass 2: AK8963 via MPU9250
+Available from [Saam Drones](https://www.saamdrones.com/).
 
-## Bus Layout
+## Pinout
 
-- I2C buses: `I2C1`, `I2C2`
-- SPI buses:
-	- `SPI1`: RAMTRON
-	- `SPI4`: main sensors
-- CAN: `CAN1`
-- SD card: SDIO interface present
+![SaamPixV1_1 Pinout](SaamPixV1_1-pinout.png)
 
-## Serial Port Mapping
+![SaamPixV1_1 Top View](SaamPixV1_1-top.png)
 
-Serial order is:
+## UART Mapping
 
-`OTG1 USART2 USART3 UART4 UART8 USART1 UART7 USART6`
+| Name | Pin | Function | Notes |
+| --- | --- | --- | --- |
+| SERIAL0 | USB OTG1 | USB Console | |
+| SERIAL1 | USART2 | Telemetry 1/MAVLink2 | CTS/RTS on PD3/PD4 |
+| SERIAL2 | USART3 | MAVLink2 (Companion computer, USB) | Onboard CP2104 USB bridge |
+| SERIAL3 | UART4 | GPS 1 | |
+| SERIAL4 | UART8 | GPS 2 (default) | |
+| SERIAL5 | USART1 | User | |
+| SERIAL6 | UART7 | Debug UART | |
 
-- `SERIAL0`: USB OTG1
-- `SERIAL1`: USART2, Telemetry 1, CTS/RTS on PD3/PD4
-- `SERIAL2`: USART3, Telemetry 2
-- `SERIAL3`: UART4, GPS
-- `SERIAL4`: UART8, FrSky telemetry
-- `SERIAL5`: USART1, SBUS
-- `SERIAL6`: UART7, debug UART
-- `SERIAL7`: USART6, alternate RC input path
+Note: SERIAL2 (USART3) is wired to an onboard CP2104 USB-to-UART
+bridge exposed on the secondary USB connector for companion-computer
+connection, not to an external telemetry header. SERIAL0 (USB OTG)
+is the primary USB console.
 
-## RC Input and PWM Outputs
+## CAN
 
-- Default RC input: TIM8 on PC6
-- Alternate RC input: USART6 on PC6
-- Public product description: 16 PWM-capable channels, arranged as 8 main and 8 auxiliary outputs
-- PWM outputs:
-	- Outputs 1-4: TIM1 on PE9, PE11, PE13, PE14
-	- Outputs 5-8: TIM4 on PD12, PD13, PD14, PD15
-	- Outputs 9-12: TIM3 on PB4, PC7, PB0, PB1
-	- Outputs 13-16: TIM2 on PA15, PB3, PA2, PA3
+The SaamPixV1_1 exposes one CAN interface:
 
-Receiver compatibility called out in public product information:
+- CAN1 RX: PD0
+- CAN1 TX: PD1
 
-- PPM
-- SBUS
-- DSM / DSM2 / DSMX
-- FrSky D / S.Port telemetry
+## I2C
 
-## Analog and Power Inputs
+The external I2C connector is on the I2C2 bus (SCL on PB10, SDA on
+PB11), shared with the GPS connector's I2C pins.
 
-- Battery current sense: PC0, ADC1
-- Battery voltage sense: PC2, ADC1
-- 5V sensor rail monitor: PA4, ADC1
-- Additional ADC inputs: PC3, PC4, PC5
+## PWM Output
 
-Default battery configuration from `hwdef.dat`:
+The SaamPixV1_1 has 16 PWM outputs. All outputs support PWM and
+DShot protocols.
 
-- Voltage pin: 12
-- Current pin: 10
-- Voltage scale: 10.1
-- Current scale: 17.0
+| Outputs | Timer | Notes |
+| --- | --- | --- |
+| 1-4 | TIM1 | GPIO(50-53) |
+| 5-8 | TIM4 | GPIO(54-57) |
+| 9-12 | TIM3 | GPIO(58-61) |
+| 13-16 | TIM2 | GPIO(62-65) |
 
-## LEDs and Misc GPIO
+Note: All outputs within the same timer group must use the same
+protocol.
 
-- Run LED: PA8
-- Tone alarm: PA7 using TIM14
-- USB VBUS detect: PA9
-- SBUS inverter control: PA10
+## RC Input
 
-## Build
+RC input is configured on the RC/PPM input by default and supports
+all ArduPilot compatible unidirectional protocols, including SBUS,
+which is connected to the RC/PPM input. Bi-directional protocols, such
+as CRSF/ELRS/FPort/SRXL2, need to utilize a full UART. See
+[RC systems](https://ardupilot.org/copter/docs/common-rc-systems.html)
+for more information.
 
-From repository root:
+## RSSI
 
-```bash
-./waf configure --board SaamPixV1_1
-./waf copter
-```
+RSSI is available as a digital input on GPIO(66). To use it, set
+`RSSI_TYPE` = 4 and `RSSI_ANA_PIN` = 66.
 
-Common targets:
+## GPIOs
 
-```bash
-./waf plane
-./waf rover
-```
+| GPIO | Function |
+| --- | --- |
+| GPIO(0) | RUN_LED |
+| GPIO(32) | ALARM (TIM14) |
+| GPIO(50) | Servo1 |
+| GPIO(51) | Servo2 |
+| GPIO(52) | Servo3 |
+| GPIO(53) | Servo4 |
+| GPIO(54) | Servo5 |
+| GPIO(55) | Servo6 |
+| GPIO(56) | Servo7 |
+| GPIO(57) | Servo8 |
+| GPIO(58) | Servo9 |
+| GPIO(59) | Servo10 |
+| GPIO(60) | Servo11 |
+| GPIO(61) | Servo12 |
+| GPIO(62) | Servo13 |
+| GPIO(63) | Servo14 |
+| GPIO(64) | Servo15 |
+| GPIO(65) | Servo16 |
+| GPIO(66) | RSSI digital input |
 
-Output artifacts are generated under `build/SaamPixV1_1/bin/`.
+## Battery Monitor
 
-## Intended Usage
+The board has an internal voltage and current sensor. The default
+battery parameters are:
 
-Public Saam Drones material describes the board as supporting:
+- `BATT_VOLT_PIN` = 12
+- `BATT_CURR_PIN` = 10
+- `BATT_VOLT_MULT` = 10.1
+- `BATT_AMP_PERVLT` = 17.0
 
-- multirotor aircraft
-- fixed-wing aircraft
-- VTOL configurations
-- hybrid UAV platforms
+These are set in the hwdef. Adjust `BATT_AMP_PERVLT` to match
+your current sensor if using an external one.
 
-It also advertises support for ArduPilot-compatible workflows using Mission Planner and QGroundControl.
+## Compass
 
-## Bootloader
+The SaamPixV1_1 has two built-in compasses: LIS3MDL and AK8963
+(via MPU9250).
 
-Build the dedicated bootloader with:
+Due to potential interference from the power supply and PWM
+circuits, disabling this and using an external I2C compass as part of a GPS/Compass
+module is recommended for best performance.
 
-```bash
-Tools/scripts/build_bootloaders.py SaamPixV1_1
-```
+## Firmware
 
-Generated bootloader artifacts are placed in `Tools/bootloaders/`.
+Firmware for the SaamPixV1_1 can be found at
+[firmware.ardupilot.org](https://firmware.ardupilot.org)
+in sub-folders labeled "SaamPixV1_1".
 
-## Flashing
+## Loading Firmware
 
-To build and upload directly:
+The board comes pre-installed with an ArduPilot compatible
+bootloader, allowing the loading of `*.apj` firmware files with
+any ArduPilot compatible ground station (Mission Planner,
+QGroundControl, MAVProxy).
 
-```bash
-./waf configure --board SaamPixV1_1
-./waf copter --upload
-```
-
-For manual flashing or first-time programming, use the generated bootloader image and the vehicle firmware `*_with_bl.hex` file.
-
-## Default Parameters
-
-Board defaults include:
-
-- `BRD_SAFETY_DEFLT = 0`
-- `BRD_BOOT_DELAY = 500`
-- `BATT_MONITOR = 3`
-- `BATT_LOW_VOLT = 21.6`
-- `RTL_ALT = 5000`
-- `AHRS_ORIENTATION = 8`
-
-See `defaults.parm` for the full default parameter set.
-
-## Notes
-
-- External SPI radio pins are present in the hwdef but currently disabled.
-- The board uses RAMTRON for parameter persistence.
-- Public Saam Drones material references micro-USB connection, TELEM1/TELEM2/UART expansion, GPS port usage, CAN, I2C, and microSD logging.
-- If this file is submitted upstream, it should be augmented with annotated board photos and connector pinout images.
+For first-time firmware installation via DFU or STLink, use the
+`*_with_bl.hex` file. See
+[Loading Firmware onto ChibiOS boards](https://ardupilot.org/copter/docs/common-loading-firmware-onto-chibios-only-boards.html)
+for instructions.

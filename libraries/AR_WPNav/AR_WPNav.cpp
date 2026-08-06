@@ -249,11 +249,13 @@ bool AR_WPNav::set_desired_location(const Location& destination, Location next_d
     } else {
         _scurve_this_leg.calculate_track(Vector3p{origin_NE.x, origin_NE.y, 0.0f},              // origin
                                          Vector3p{destination_NE.x, destination_NE.y, 0.0f},    // destination
+                                         0.0, // arc length is zero for straight track
                                          _pos_control.get_speed_max(),
                                          _pos_control.get_speed_max(),  // speed up (not used)
                                          _pos_control.get_speed_max(),  // speed down (not used)
                                          _pos_control.get_accel_max(),  // forward back acceleration
                                          _pos_control.get_accel_max(),  // vertical accel (not used)
+                                         _pos_control.get_accel_max(),  // corner acceleration
                                          AR_WPNAV_SNAP_MAX,             // snap
                                          _pos_control.get_jerk_max());
     }
@@ -276,11 +278,13 @@ bool AR_WPNav::set_desired_location(const Location& destination, Location next_d
             next_destination_NE *= 0.01f;
             _scurve_next_leg.calculate_track(Vector3p{destination_NE.x, destination_NE.y, 0.0f},
                                              Vector3p{next_destination_NE.x, next_destination_NE.y, 0.0f},
+                                             0.0, // arc length is zero for straight track
                                              _pos_control.get_speed_max(),
                                              _pos_control.get_speed_max(),  // speed up (not used)
                                              _pos_control.get_speed_max(),  // speed down (not used)
                                              _pos_control.get_accel_max(),  // forward back acceleration
                                              _pos_control.get_accel_max(),  // vertical accel (not used)
+                                             _pos_control.get_accel_max(),  // corner accel
                                              AR_WPNAV_SNAP_MAX,             // snap
                                              _pos_control.get_jerk_max());
 
@@ -487,7 +491,7 @@ void AR_WPNav::update_psc_input_shaping(float dt)
     }
 }
 
-// update distance from vehicle's current position to destination
+// update straight-line distance and bearing from vehicle's current position to destination
 void AR_WPNav::update_distance_and_bearing_to_destination()
 {
     // if no current location leave distance unchanged
@@ -532,6 +536,7 @@ void AR_WPNav::set_turn_params(float turn_radius, bool pivot_possible)
 }
 
 // calculate the crosstrack error
+// value is negative when the vehicle is on the path's left side
 float AR_WPNav::calc_crosstrack_error(const Location& current_loc) const
 {
     if (!_orig_and_dest_valid) {

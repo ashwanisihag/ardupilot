@@ -6,6 +6,7 @@
 #include <AP_Param/AP_Param.h>
 #include <AP_Math/AP_Math.h>
 #include <Filter/DerivativeFilter.h>
+#include <Filter/LowPassFilter.h>
 #include <AP_MSP/msp.h>
 #include <AP_ExternalAHRS/AP_ExternalAHRS.h>
 
@@ -86,6 +87,7 @@ public:
     float get_pressure_correction(void) const { return get_pressure_correction(_primary); }
     float get_pressure_correction(uint8_t instance) const { return sensors[instance].p_correction; }
 
+#if AP_BARO_CALIBRATION_ENABLED
     // calibrate the barometer. This must be called on startup if the
     // altitude/climb_rate/acceleration interfaces are ever used
     void calibrate(bool save=true);
@@ -93,6 +95,7 @@ public:
     // update the barometer calibration to the current pressure. Can
     // be used for incremental preflight update of baro
     void update_calibration(void);
+#endif  // AP_BARO_CALIBRATION_ENABLED
 
     // get current altitude in meters relative to altitude at the time
     // of the last calibrate() call
@@ -142,10 +145,6 @@ public:
     // airspeed. This should only be used to update the AHRS value
     // once per loop. Please use AP::ahrs().get_EAS2TAS()
     float _get_EAS2TAS(void) const;
-
-    // get air density / sea level density - decreases as altitude climbs
-    // please use AP::ahrs()::get_air_density_ratio()
-    float _get_air_density_ratio(void);
 
     // get current climb rate in meters/s. A positive number means
     // going up
@@ -327,10 +326,26 @@ private:
     // when did we last notify the GCS of new pressure reference?
     uint32_t                            _last_notify_ms;
 
-    // see if we already have probed a i2c driver by bus number and address
-    bool _have_i2c_driver(uint8_t bus_num, uint8_t address) const;
+    // see if we already have probed a i2c sensor by bus number and address
+    bool _i2c_sensor_is_registered(uint8_t bus_num, uint8_t address) const;
     bool _add_backend(AP_Baro_Backend *backend);
     void _probe_i2c_barometers(void);
+
+    void probe_i2c_dev(AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&), uint8_t bus, uint8_t addr);
+    void probe_spi_dev(AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&), const char *name);
+    void probe_dev(AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&), AP_HAL::Device *dev);
+#if AP_BARO_ICM20789_ENABLED
+    void probe_icm20789(uint8_t bus, uint8_t addr, const char *mpu_name);
+    void probe_icm20789(uint8_t bus, uint8_t addr, uint8_t mpu_bus, uint8_t mpu_addr);
+    // convenience underlying method for other probe functions;
+    // will. delete the passed-in devices if a backend is not found
+    void _probe_icm20789(AP_HAL::I2CDevice *i2c_dev, AP_HAL::Device *mpu_dev);
+#endif  // AP_BARO_ICM20789_ENABLED
+
+#if AP_BARO_LPS2XH_ENABLED
+    void probe_lps2xh_via_Invensense_IMU(uint8_t bus, uint8_t addr, uint8_t mpu_addr);
+#endif  // AP_BARO_LPS2XH_ENABLED
+
     AP_Int8                            _filter_range;  // valid value range from mean value
     AP_Int32                           _baro_probe_ext;
 
@@ -351,6 +366,11 @@ private:
 #endif
 #if AP_BARO_THST_COMP_ENABLED
     float thrust_pressure_correction(uint8_t instance);
+    void update_thrust_filter(void);        // update filtered throttle once per update cycle
+    LowPassFilterFloat _thrust_filter;      // low-pass filter for thrust compensation
+    uint32_t _thrust_filter_last_update_us; // last update time for filter dt calculation
+    AP_Float _thst_filt_cutoff;             // thrust filter cutoff frequency in Hz
+    float _filtered_throttle;               // filtered throttle value for thrust compensation
 #endif
     // Logging function
     void Write_Baro(void);

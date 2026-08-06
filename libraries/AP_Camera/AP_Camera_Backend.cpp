@@ -85,7 +85,7 @@ void AP_Camera_Backend::update()
     }
 
     // check vehicle roll angle is less than configured maximum
-    if ((_frontend.get_roll_max() > 0) && (fabsf(ahrs.roll_sensor * 1e-2f) > _frontend.get_roll_max())) {
+    if ((_frontend.get_roll_max() > 0) && (fabsf(ahrs.get_roll_deg()) > _frontend.get_roll_max())) {
         return;
     }
 
@@ -346,7 +346,8 @@ void AP_Camera_Backend::send_camera_fov_status(mavlink_channel_t chan) const
 void AP_Camera_Backend::send_camera_capture_status(mavlink_channel_t chan) const
 {
     // Current status of image capturing (0: idle, 1: capture in progress, 2: interval set but idle, 3: interval set and capture in progress)
-    const uint8_t image_status = (time_interval_settings.num_remaining > 0) ? 2 : 0;
+    // num_remaining is -1 when capturing until stopped, so test the same way update() does
+    const uint8_t image_status = (time_interval_settings.num_remaining != 0) ? 2 : 0;
 
     // send CAMERA_CAPTURE_STATUS message
     mavlink_msg_camera_capture_status_send(

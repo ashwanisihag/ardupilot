@@ -6,16 +6,47 @@ AP_FLAKE8_CLEAN
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import shlex
 import sys
+
+from dataclasses import dataclass
 
 
 class IncludeNotFoundException(Exception):
     def __init__(self, hwdef, includer):
         self.hwdef = hwdef
         self.includer = includer
+
+
+@dataclass
+class SPIDev():
+    name : str
+
+
+@dataclass
+class I2CDev():
+    busnum : int
+    busaddr : int
+    buses_to_probe : str
+
+
+@dataclass
+class Baro():
+    driver : str
+    probe : str
+    devlist : list
+
+
+@dataclass(frozen=True)
+class Compass():
+    driver: str
+    probe: str
+    devlist: list
+    force_external: str  # should be bool eventually
+    rotation: str
 
 
 class HWDef:
@@ -39,6 +70,11 @@ class HWDef:
         # output lines:
         self.all_lines = []
 
+        # dictionary of romfs filename -> source filename for files added via
+        # the ROMFS / ROMFS_WILDCARD / ROMFS_DIRECTORY hwdef keywords;
+        # published to env_vars['ROMFS_FILES'] by write_ROMFS()
+        self.romfs = {}
+
         # integer defines
         self.intdefines = {}
 
@@ -57,11 +93,15 @@ class HWDef:
         # populate a stale defines map from define name to reason-it-is-bad
         self.stale_defines = self.get_stale_defines()
 
+        # members used to ensure we don't have duplicate sensors defined:
+        self.seen_BARO_lines = set()
+        self.seen_COMPASS_lines = set()
+
     def is_int(self, str):
         '''check if a string is an integer'''
         try:
             int(str)
-        except Exception:
+        except ValueError:
             return False
         return True
 
@@ -199,6 +239,12 @@ class HWDef:
         # write out hwdef.h
         self.write_hwdef_header(self.get_output_path("hwdef.h"))
 
+        # publish any ROMFS files into env_vars so the waf build picks
+        # them up via process_hwdef_results. Subclasses that override
+        # run() and need ROMFS handling at a specific point in their
+        # flow should call self.write_ROMFS() directly there.
+        self.write_ROMFS()
+
     def process_line(self, line, depth):
         '''process one line of pin definition file'''
         a = shlex.split(line, posix=False)
@@ -216,10 +262,67 @@ class HWDef:
             self.imu_list.append(a[1:])
 
         elif a[0] == 'COMPASS':
-            self.compass_list.append(a[1:])
+            self.process_line_COMPASS(line, depth, a)
 
         elif a[0] == 'BARO':
-            self.baro_list.append(a[1:])
+            self.process_line_BARO(line, depth, a)
+
+        elif a[0] == 'ROMFS':
+            self.romfs_add(a[1], a[2])
+
+        elif a[0] == 'ROMFS_WILDCARD':
+            self.romfs_wildcard(a[1])
+
+        elif a[0] == 'ROMFS_DIRECTORY':
+            self.romfs_add_dir([a[1]], relative_to_base=True)
+
+    def romfs_add(self, romfs_filename, filename):
+        '''add a single file to ROMFS at romfs_filename, sourced from filename'''
+        self.romfs[romfs_filename] = filename
+
+    def romfs_wildcard(self, pattern):
+        '''add a set of files to ROMFS matching pattern (e.g. "models/*.parm");
+        the path is taken relative to the ardupilot repo root.'''
+        base_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..')
+        (pattern_dir, pattern) = os.path.split(pattern)
+        for f in os.listdir(os.path.join(base_path, pattern_dir)):
+            if fnmatch.fnmatch(f, pattern):
+                self.romfs[f] = os.path.join(pattern_dir, f)
+
+    def romfs_add_dir(self, subdirs, relative_to_base=False):
+        '''recursively add a directory tree to ROMFS. subdirs are taken
+        relative to the hwdef.dat by default, or to the ardupilot repo
+        root when relative_to_base=True (the ROMFS_DIRECTORY hwdef
+        keyword uses relative_to_base=True).'''
+        for dirname in subdirs:
+            if relative_to_base:
+                romfs_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', dirname)
+            else:
+                romfs_dir = os.path.join(os.path.dirname(self.hwdef[0]), dirname)
+            if not os.path.exists(romfs_dir):
+                continue
+            for root, dirs, files in os.walk(romfs_dir):
+                for f in files:
+                    if fnmatch.fnmatch(f, '*~'):
+                        # skip editor backup files
+                        continue
+                    fullpath = os.path.join(root, f)
+                    relpath = os.path.normpath(os.path.join(dirname, os.path.relpath(root, romfs_dir), f))
+                    if relative_to_base:
+                        relpath = relpath[len(dirname)+1:]
+                    self.romfs[relpath] = fullpath
+
+    def write_ROMFS(self):
+        '''publish ROMFS file list to env_vars so the waf build embeds them
+        via process_hwdef_results. Safe to call multiple times; subclasses
+        that need it at a specific point in their run() should call it
+        directly. Does nothing if no ROMFS files have been registered.'''
+        if not self.romfs:
+            return
+        romfs_list = []
+        for k in sorted(self.romfs.keys()):
+            romfs_list.append((k, self.romfs[k]))
+        self.env_vars['ROMFS_FILES'] = romfs_list
 
     def process_line_undef(self, line, depth, a):
         for u in a[1:]:
@@ -234,8 +337,12 @@ class HWDef:
                 self.imu_list = []
             if u == 'COMPASS':
                 self.compass_list = []
+                self.seen_COMPASS_lines = set()
             if u == 'BARO':
                 self.baro_list = []
+                self.seen_BARO_lines = set()
+            if u == 'ROMFS':
+                self.romfs = {}
 
     def process_line_env(self, line, depth, a):
         self.progress("Adding environment %s" % ' '.join(a[1:]))
@@ -243,22 +350,43 @@ class HWDef:
             self.error("Bad env line for %s" % a[0])
         name = a[1]
         value = ' '.join(a[2:])
+        if name == 'OPTIMIZE' and value == '-Os':
+            self.error("'env OPTIMIZE -Os' should not appear in hwdef files, as -Os is the default")
         self.env_vars[name] = value
 
     def get_stale_defines(self):
         '''returns a map with a stale define and a comment as to what to do about it'''
         return {
+            'HAL_COMPASS_DEFAULT': 'HAL_COMPASS_DEFAULT is no longer used; remove it from your hwdef',
             'HAL_NO_GCS': 'HAL_NO_GCS is no longer used; try "define HAL_GCS_ENABLED 0"',
             'HAL_NO_LOGGING': 'HAL_NO_LOGGING is no longer used; try "define HAL_LOGGING_ENABLED 0"',
             'HAL_NO_UARTDRIVER': 'HAL_NO_UARTDRIVER is no longer used; try "define AP_HAL_UARTDRIVER_ENABLED 0"',
             'HAL_DISABLE_LOOP_DELAY': 'HAL_DISABLE_LOOP_DELAY is no longer used; try "define HAL_SCHEDULER_LOOP_DELAY_ENABLED 0"',  # noqa:E501
             'HAL_EXTERNAL_AHRS_ENABLED': 'HAL_EXTERNAL_AHRS_ENABLED is no longer used; try "define AP_EXTERNAL_AHRS_ENABLED 1"',  # noqa:E501
             'HAL_PROBE_EXTERNAL_I2C_COMPASSES': 'HAL_PROBE_EXTERNAL_I2C_COMPASSES is no longer used; try "define AP_COMPASS_PROBING_ENABLED 1"',  # noqa:E501
+            'HAL_SKIP_AUTO_INTERNAL_I2C_PROBE': 'HAL_SKIP_AUTO_INTERNAL_I2C_PROBE is no longer used; try "define AP_COMPASS_INTERNAL_BUS_PROBING_ENABLED 0',  # noqa:E501
+            'HAL_COMPASS_DISABLE_IST8310_INTERNAL_PROBE': 'HAL_COMPASS_DISABLE_IST8310_INTERNAL_PROBE is no longer used; try "define AP_COMPASS_IST8310_INTERNAL_BUS_PROBING_ENABLED 0"',  # noqa:E501
+            'BOARD_PWM_COUNT_DEFAULT': 'BOARD_PWM_COUNT_DEFAULT is no longer used; remove it from your hwdef files',
+            'HAL_PICCOLO_CAN_ENABLE': 'HAL_PICCOLO_CAN_ENABLE was renamed to AP_PICCOLOCAN_ENABLED; fix your hwdef file',
+            'HAL_PERIPH_ENABLE_NETWORKING': 'HAL_PERIPH_ENABLE_NETWORKING is no longer used; try "define AP_PERIPH_NETWORKING_ENABLED 1"',  # noqa:E501
+            'HAL_PROBE_EXTERNAL_I2C_BAROS': 'HAL_PROBE_EXTERNAL_I2C_BAROS is no longer used; try "define AP_BARO_PROBE_EXTERNAL_I2C_BUSES 1"',  # noqa:E501
         }
 
     def assert_good_define(self, name):
         if name in self.stale_defines:
             self.error(self.stale_defines[name])
+
+    def is_periph_fw(self):
+        return False
+
+    def validate_periph_defines(self):
+        '''error if any AP_PERIPH_* define is present on a non-AP_Periph board'''
+        if self.is_periph_fw():
+            return
+
+        for name in self.intdefines:
+            if name.startswith('AP_PERIPH_') and self.intdefines[name]:
+                self.error(f"define {name} is only valid on AP_Periph boards")
 
     def process_line_define(self, line, depth, a):
         # defines are currently written out a little haphazardly, but
@@ -268,6 +396,17 @@ class HWDef:
             # ensure that stale defines aren't introduced into hwdef files:
             name = result.group(1)
             self.assert_good_define(name)
+
+        # a serial port's default protocol must be given as a SerialProtocol_*
+        # name, not a bare number, so the value stays readable and is checked
+        # by AP_SerialManager_default_protocol_check.cpp.  Both DEFAULT_SERIALn
+        # and HAL_OTGn feed the DEFAULT_SERIALn value that file asserts on (the
+        # deprecated HAL_SERIALn form is rejected separately in
+        # AP_SerialManager.cpp):
+        result = re.match(r'define\s+((?:DEFAULT_SERIAL|HAL_OTG)[0-9]+_PROTOCOL)\s+(-?[0-9]+)\s*$', line)
+        if result is not None:
+            self.error("%s must use a SerialProtocol_* name, not the numeric value %s" %
+                       (result.group(1), result.group(2)))
 
         # extract numerical defines for processing by other parts of the script
         result = re.match(r'define\s*([A-Z_0-9]+)\s+([0-9]+)', line)
@@ -283,24 +422,52 @@ class HWDef:
 
     def parse_spi_device(self, dev):
         '''parse a SPI:xxx device item'''
+        o = self.spi_dev_to_object(dev)
+        return f'hal.spi->get_device("{o.name}")'
+
+    def spi_dev_to_object(self, dev):
         a = dev.split(':')
         if len(a) != 2:
             self.error("Bad SPI device: %s" % dev)
-        return 'hal.spi->get_device("%s")' % a[1]
+        return SPIDev(a[1])
 
-    def parse_i2c_device(self, dev):
+    def i2c_dev_to_object(self, dev):
         '''parse a I2C:xxx:xxx device item'''
         a = dev.split(':')
         if len(a) != 3:
             self.error("Bad I2C device: %s" % dev)
         busaddr = int(a[2], base=0)
+
+        busnum = a[1]
+        buses_to_probe = 'SINGLE'
+        if busnum in {'ALL_INTERNAL', 'ALL', 'ALL_EXTERNAL'}:
+            # ... not a bus number at all
+            buses_to_probe = busnum
+            busnum = None
+        else:
+            busnum = int(busnum)
+
+        return I2CDev(
+            busaddr=busaddr,
+            busnum=busnum,
+            buses_to_probe=buses_to_probe,
+        )
+
+    def parse_i2c_device(self, dev):
+        '''parse a I2C:xxx:xxx device item'''
+        o = self.i2c_dev_to_object(dev)
+        a = ['x', o.buses_to_probe]
+        busaddr = o.busaddr
+
         if a[1] == 'ALL_EXTERNAL':
             return ('FOREACH_I2C_EXTERNAL(b)', 'GET_I2C_DEVICE(b,0x%02x)' % (busaddr))
         elif a[1] == 'ALL_INTERNAL':
             return ('FOREACH_I2C_INTERNAL(b)', 'GET_I2C_DEVICE(b,0x%02x)' % (busaddr))
         elif a[1] == 'ALL':
             return ('FOREACH_I2C(b)', 'GET_I2C_DEVICE(b,0x%02x)' % (busaddr))
-        busnum = int(a[1])
+        elif a[1] != 'SINGLE':
+            raise ValueError(f"Unknown buses_to_probe type {o.buses_to_probe=}")
+        busnum = o.busnum
         return ('', 'GET_I2C_DEVICE(%u,0x%02x)' % (busnum, busaddr))
 
     def seen_str(self, dev):
@@ -355,61 +522,224 @@ class HWDef:
                 self.write_defaulting_define(f, 'INS_MAX_INSTANCES', len(devlist))
             f.write('#define HAL_INS_PROBE_LIST %s\n\n' % ';'.join(devlist))
 
-    def write_MAG_config(self, f):
-        '''write MAG config defines'''
-        devlist = []
-        seen = set()
-        for dev in self.compass_list:
+    def process_line_COMPASS(self, line, depth, a):
+        orig_a = a
+        if True:
+            dev = a[1:]
+            seen = self.seen_COMPASS_lines
+
             if self.seen_str(dev) in seen:
                 self.error("Duplicate MAG: %s" % self.seen_str(dev))
             seen.add(self.seen_str(dev))
             driver = dev[0]
+            dev = dev[1:]
             probe = 'probe'
-            wrapper = ''
             a = driver.split(':')
             driver = a[0]
+
             if len(a) > 1 and a[1].startswith('probe'):
                 probe = a[1]
-            for i in range(1, len(dev)):
-                if dev[i].startswith("SPI:"):
-                    dev[i] = self.parse_spi_device(dev[i])
-                elif dev[i].startswith("I2C:"):
-                    (wrapper, dev[i]) = self.parse_i2c_device(dev[i])
+
+            expected_device_count = 1
+            if driver == 'AK09916' and probe == 'probe_ICM20948':
+                expected_device_count = 1
+            elif driver == 'AK09916' and probe != 'probe':
+                expected_device_count = 0
+            elif driver == 'AK8963' and probe == 'probe_mpu9250':
+                expected_device_count = 1
+            elif driver == 'AK8963' and probe != 'probe':
+                expected_device_count = 0
+
+            # this maps from a driver name in the hwdef to an
+            # ArduPilot driver name.  This is useful if devices are
+            # believed to be identical but we want to reserve the
+            # option of differentiating later.  If you add something
+            # here, consider adding something to build_options.py
+            device_type_to_driver_mapping = {
+                "LIS2MDL": "IIS2MDC",
+            }
+
+            # apply mapping from hwdef driver to ArduPilot driver:
+            driver = device_type_to_driver_mapping.get(driver, driver)
+
+            devlist = []
+            for i in range(0, expected_device_count):
+                d = dev[0]
+                dev = dev[1:]
+                if d.startswith("SPI:"):
+                    devlist.append(self.spi_dev_to_object(d))
+                elif d.startswith("I2C:"):
+                    devlist.append(self.i2c_dev_to_object(d))
+                elif ((driver == 'AK8963' and probe == 'probe_mpu9250') or
+                      (driver == 'AK09916' and probe == 'probe_ICM20948') and
+                      d.isdigit()):
+                    devlist.append(d)
+                else:
+                    raise ValueError(f"Unknown device ({d=}) ({orig_a=})")
+
+            # some compass backends take force-external, some don't:
+            if len(dev) == 2:
+                (force_external, rotation) = dev
+            elif len(dev) == 1:
+                force_external = None
+                (rotation,) = dev
+            else:
+                raise ValueError(f"Pieces left over from ({orig_a=}): ({dev=})")
+
+            c = Compass(
+                driver=driver,
+                probe=probe,
+                devlist=devlist,
+                force_external=force_external,
+                rotation=rotation,
+            )
+            self.compass_list.append(c)
+
+    def write_MAG_config(self, f):
+        '''write MAG config defines'''
+        devlist = []
+        for compass in self.compass_list:
+            driver = compass.driver
+            probe = compass.probe
+            wrapper = ''
+            if len(compass.devlist) > 0:
+                if isinstance(compass.devlist[0], I2CDev):
+                    buses_to_probe = compass.devlist[0].buses_to_probe
+                    if buses_to_probe == 'ALL':
+                        wrapper = 'FOREACH_I2C(b)'
+                    elif buses_to_probe == 'ALL_EXTERNAL':
+                        wrapper = 'FOREACH_I2C_EXTERNAL(b)'
+                    elif buses_to_probe == 'ALL_INTERNAL':
+                        wrapper = 'FOREACH_I2C_INTERNAL(b)'
+                    elif buses_to_probe == 'SINGLE':
+                        pass
+                    elif isinstance(buses_to_probe, int):
+                        pass
+                    else:
+                        raise ValueError(f"Unexpected buses_to_probe {buses_to_probe=}")
+
             n = len(devlist)+1
             devlist.append('HAL_MAG_PROBE%u' % n)
+
+            args = []
+            for dev in compass.devlist:
+                if isinstance(dev, I2CDev):
+                    if dev.buses_to_probe == 'SINGLE':
+                        busnum = str(dev.busnum)
+                    elif dev.buses_to_probe in {'ALL', 'ALL_EXTERNAL', 'ALL_INTERNAL'}:
+                        busnum = 'b'
+                    else:
+                        raise ValueError("Unexpected {buses_to_probe=}")
+                    args.extend(["GET_I2C_DEVICE(%s,0x%02x)" % (busnum, dev.busaddr)])
+                elif isinstance(dev, SPIDev):
+                    args.extend([f'hal.spi->get_device("{dev.name}")'])
+                elif dev.isdigit():
+                    args.extend([str(dev)])
+                else:
+                    raise ValueError("unexpected devbit {dev=}")
+
+            if compass.force_external is not None:
+                args.append(str(compass.force_external))
+            args.append(str(compass.rotation))
+
             f.write(
-                '#define HAL_MAG_PROBE%u %s ADD_BACKEND(DRIVER_%s, AP_Compass_%s::%s(%s))\n'
-                % (n, wrapper, driver, driver, probe, ','.join(dev[1:])))
+                '''#define HAL_MAG_PROBE%u %s \\
+                    if (_driver_enabled(DRIVER_%s)) { \\
+                        {add_backend(DRIVER_%s, AP_Compass_%s::%s(%s));RETURN_IF_NO_SPACE;} \\
+                    }\n'''
+                % (n, wrapper, driver, driver, driver, probe, ','.join(args)))
             f.write(f"#undef AP_COMPASS_{driver}_ENABLED\n#define AP_COMPASS_{driver}_ENABLED 1\n")
         if len(devlist) > 0:
             f.write('#define HAL_MAG_PROBE_LIST %s\n\n' % ';'.join(devlist))
 
-    def write_BARO_config(self, f):
-        '''write barometer config defines'''
-        devlist = []
-        seen = set()
-        for dev in self.baro_list:
+    def process_line_BARO(self, line, depth, a):
+        if True:
+            dev = a[1:]
+            seen = self.seen_BARO_lines
+
             if self.seen_str(dev) in seen:
                 self.error("Duplicate BARO: %s" % self.seen_str(dev))
             seen.add(self.seen_str(dev))
             driver = dev[0]
             probe = 'probe'
-            wrapper = ''
             a = driver.split(':')
             driver = a[0]
             if len(a) > 1 and a[1].startswith('probe'):
                 probe = a[1]
-            for i in range(1, len(dev)):
-                if dev[i].startswith("SPI:"):
-                    dev[i] = self.parse_spi_device(dev[i])
-                elif dev[i].startswith("I2C:"):
-                    (wrapper, dev[i]) = self.parse_i2c_device(dev[i])
+            devlist = []
+            for d in dev[1:]:
+                if d.startswith("SPI:"):
+                    devlist.append(self.spi_dev_to_object(d))
+                elif d.startswith("I2C:"):
+                    devlist.append(self.i2c_dev_to_object(d))
+                elif re.match("0x[0-9A-F][0-9A-F]", d.lower()):
+                    # LPS2XH uses a single address to identify the IMU
+                    # which the baro is attached to...
+                    devlist.append(d)
+                else:
+                    raise ValueError(f"Unknown device ({dev=})")
+
+            b = Baro(
+                driver=driver,
+                probe=probe,
+                devlist=devlist,
+            )
+            self.baro_list.append(b)
+
+    def write_BARO_config(self, f):
+        '''write barometer config defines'''
+        devlist = []
+        for baro in self.baro_list:
+            driver = baro.driver
+            probe = baro.probe
+
             n = len(devlist)+1
+
+            backend_probe_method = f"AP_Baro_{driver}::{probe}"
+
+            if driver == "ICM20789":
+                baro_probe_method_name = "probe_icm20789"
+            elif driver == "LPS2XH" and probe == "probe_InvensenseIMU":
+                baro_probe_method_name = "probe_lps2xh_via_Invensense_IMU"
+            elif isinstance(baro.devlist[0], SPIDev):
+                baro_probe_method_name = "probe_spi_dev"
+            elif isinstance(baro.devlist[0], I2CDev):
+                baro_probe_method_name = "probe_i2c_dev"
+
+            args = []
+            if baro_probe_method_name == 'probe_spi_dev':
+                args.append(backend_probe_method)
+                expected_devices = 1
+            elif baro_probe_method_name == 'probe_i2c_dev':
+                args.append(backend_probe_method)
+                expected_devices = 1
+            elif baro_probe_method_name == 'probe_icm20789':
+                expected_devices = 2
+            elif baro_probe_method_name == 'probe_lps2xh_via_Invensense_IMU':
+                expected_devices = 2
+            else:
+                raise ValueError(f"probe method {baro_probe_method_name}")
+            if len(baro.devlist) != expected_devices:
+                raise ValueError("Expected {len(baro.devlist)} devices for {baro_probe_method_name}")
+
+            for dev in baro.devlist:
+                if isinstance(dev, I2CDev):
+                    if dev.buses_to_probe != 'SINGLE':
+                        # if you need to do more than SINGLE then create methods like
+                        # probe_i2c_on_external_buses(probe_fn, dev.busaddr)
+                        raise ValueError("Only SINGLE is handled at the moment")
+                    args.extend([str(dev.busnum), str(dev.busaddr)])
+                elif isinstance(dev, SPIDev):
+                    args.extend([f'"{dev.name}"'])
+                else:
+                    args.extend([str(dev)])
+
+            print(f"{args=}")
+            f.write(f'''
+#define HAL_BARO_PROBE{n} {baro_probe_method_name}({', '.join(args)}); RETURN_IF_NO_SPACE;
+''')
+
             devlist.append('HAL_BARO_PROBE%u' % n)
-            args = ['*this'] + dev[1:]
-            f.write(
-                '#define HAL_BARO_PROBE%u %s ADD_BACKEND(AP_Baro_%s::%s(%s))\n'
-                % (n, wrapper, driver, probe, ','.join(args)))
             f.write(f"#undef AP_BARO_{driver}_ENABLED\n#define AP_BARO_{driver}_ENABLED 1\n")
         if len(devlist) > 0:
             f.write('#define HAL_BARO_PROBE_LIST %s\n\n' % ';'.join(devlist))

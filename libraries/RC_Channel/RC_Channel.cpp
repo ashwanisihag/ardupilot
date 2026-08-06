@@ -231,7 +231,7 @@ const AP_Param::GroupInfo RC_Channel::var_info[] = {
     // @Values{Plane}: 160:Weathervane Enable
     // @Values{Copter}: 161:Turbine Start(heli)
     // @Values{Copter, Rover, Plane}: 162:FFT Tune
-    // @Values{Copter, Rover, Plane, Sub}: 163:Mount Lock
+    // @Values{Copter, Rover, Plane, Sub}: 163:Mount Yaw Lock
     // @Values{Copter, Rover, Plane, Blimp, Sub}: 164:Pause Stream Logging
     // @Values{Copter, Rover, Plane, Sub}: 165:Arm/Emergency Motor Stop
     // @Values{Copter, Rover, Plane, Blimp, Sub}: 166:Camera Record Video, 167:Camera Zoom, 168:Camera Manual Focus, 169:Camera Auto Focus
@@ -249,7 +249,10 @@ const AP_Param::GroupInfo RC_Channel::var_info[] = {
     // @Values{Plane}: 181: QuickTune
     // @Values{Copter}: 182: AHRS AutoTrim
     // @Values{Plane}: 183: AUTOLAND mode
-    // @Values{Plane}: 184: System ID Chirp (Quadplane only)
+    // @Values{Plane}: 184: System ID Chirp
+    // @Values{Copter, Rover, Plane, Blimp, Sub}: 185:Mount Roll/Pitch Lock
+    // @Values{Copter, Rover, Plane, Blimp, Sub}: 186:Mount POI Lock
+    // @Values{Copter, Rover, Plane, Blimp, Sub}: 187:EKF Reset
     // @Values{Rover}: 201:Roll
     // @Values{Rover}: 202:Pitch
     // @Values{Rover}: 207:MainSail
@@ -300,10 +303,11 @@ bool RC_Channel::get_reverse(void) const
 // read input from hal.rcin or overrides
 bool RC_Channel::update(void)
 {
+    raw_radio_in = hal.rcin->read(ch_in);
     if (has_override() && !rc().option_is_enabled(RC_Channels::Option::IGNORE_OVERRIDES)) {
         radio_in = override_value;
     } else if (rc().has_had_rc_receiver() && !rc().option_is_enabled(RC_Channels::Option::IGNORE_RECEIVER)) {
-        radio_in = hal.rcin->read(ch_in);
+        radio_in = raw_radio_in;
     } else {
         return false;
     }
@@ -506,6 +510,13 @@ bool RC_Channel::in_trim_dz() const
     return is_bounded_int32(radio_in, radio_trim - dead_zone, radio_trim + dead_zone);
 }
 
+/*
+  return true if raw input is within deadzone of trim
+*/
+bool RC_Channel::in_raw_trim_dz() const
+{
+    return is_bounded_int32(raw_radio_in, radio_trim - dead_zone, radio_trim + dead_zone);
+}
 
 /*
    return trues if input is within deadzone of min
@@ -521,6 +532,18 @@ void RC_Channel::set_override(const uint16_t v, const uint32_t timestamp_ms)
         return;
     }
 
+    // the channel that controls override-enable must always reflect the
+    // physical RC switch; accepting a GCS override here would let the GCS
+    // disable its own overrides and create an oscillation
+    if ((AUX_FUNC)option.get() == AUX_FUNC::RC_OVERRIDE_ENABLE) {
+        return;
+    }
+
+    // store throttle pwm at the start of an override session
+    if (!rc().has_active_overrides()) {
+        rc().set_override_start_throttle(rc().get_throttle_channel().get_raw_radio_in());
+    }
+
     last_override_time = timestamp_ms != 0 ? timestamp_ms : AP_HAL::millis();
     override_value = v;
     rc().new_override_received();
@@ -530,6 +553,10 @@ void RC_Channel::clear_override()
 {
     last_override_time = 0;
     override_value = 0;
+    // only forget the throttle override-start pwm once no overrides remain
+    if (!rc().has_active_overrides()) {
+        rc().set_override_start_throttle(-1);
+    }
 }
 
 bool RC_Channel::has_override() const
@@ -677,6 +704,7 @@ void RC_Channel::init_aux_function(const AUX_FUNC ch_option, const AuxSwitchPos 
 #if AP_GRIPPER_ENABLED
     case AUX_FUNC::GRIPPER:
 #endif
+#if AP_LANDINGGEAR_ENABLED
     case AUX_FUNC::LANDING_GEAR:
 #endif
     case AUX_FUNC::LOST_VEHICLE_SOUND:
@@ -694,6 +722,9 @@ void RC_Channel::init_aux_function(const AUX_FUNC ch_option, const AuxSwitchPos 
 #if AP_AHRS_ENABLED
     case AUX_FUNC::EKF_LANE_SWITCH:
     case AUX_FUNC::EKF_YAW_RESET:
+#endif
+#if AP_AHRS_EKF_RESET_ENABLED
+    case AUX_FUNC::EKF_RESET:
 #endif
 #if HAL_GENERATOR_ENABLED
     case AUX_FUNC::GENERATOR: // don't turn generator on or off initially
@@ -766,6 +797,7 @@ void RC_Channel::init_aux_function(const AUX_FUNC ch_option, const AuxSwitchPos 
 #if AP_GPS_ENABLED
     case AUX_FUNC::GPS_DISABLE:
     case AUX_FUNC::GPS_DISABLE_YAW:
+#endif
 #if AP_INERTIALSENSOR_KILL_IMU_ENABLED
     case AUX_FUNC::KILL_IMU1:
     case AUX_FUNC::KILL_IMU2:
@@ -790,8 +822,12 @@ void RC_Channel::init_aux_function(const AUX_FUNC ch_option, const AuxSwitchPos 
 #if HAL_MOUNT_ENABLED
     case AUX_FUNC::RETRACT_MOUNT1:
     case AUX_FUNC::RETRACT_MOUNT2:
-    case AUX_FUNC::MOUNT_LOCK:
-#endif
+    case AUX_FUNC::MOUNT_YAW_LOCK:
+    case AUX_FUNC::MOUNT_RP_LOCK:
+#if AP_MOUNT_POI_LOCK_ENABLED
+    case AUX_FUNC::MOUNT_POI_LOCK:
+#endif //AP_MOUNT_POI_LOCK_ENABLED
+#endif //HAL_MOUNT_ENABLED
 #if HAL_LOGGING_ENABLED
     case AUX_FUNC::LOG_PAUSE:
 #endif
@@ -911,8 +947,9 @@ const RC_Channel::LookupTable RC_Channel::lookuptable[] = {
     { AUX_FUNC::TURBINE_START, "Turbine Start"},
     { AUX_FUNC::FFT_NOTCH_TUNE, "FFT Notch Tuning"},
 #if HAL_MOUNT_ENABLED
-    { AUX_FUNC::MOUNT_LOCK, "MountLock"},
-#endif
+    { AUX_FUNC::MOUNT_YAW_LOCK, "Mount Yaw Lock"},
+    { AUX_FUNC::MOUNT_RP_LOCK, "Mount Roll/Pitch Lock"},
+#endif //HAL_MOUNT_ENABLED
 #if HAL_LOGGING_ENABLED
     { AUX_FUNC::LOG_PAUSE, "Pause Stream Logging"},
 #endif
@@ -940,7 +977,7 @@ const char *RC_Channel::string_for_aux_function(AUX_FUNC function) const
     return nullptr;
 }
 
-/* find string for postion */
+/* find string for position */
 const char *RC_Channel::string_for_aux_pos(AuxSwitchPos pos) const
 {
     switch (pos) {
@@ -1260,11 +1297,7 @@ void RC_Channel::do_aux_function_fence(const AuxSwitchPos ch_flag)
 void RC_Channel::do_aux_function_clear_wp(const AuxSwitchPos ch_flag)
 {
     if (ch_flag == AuxSwitchPos::HIGH) {
-        AP_Mission *mission = AP::mission();
-        if (mission == nullptr) {
-            return;
-        }
-        mission->clear();
+        AP::mission().clear();
     }
 }
 #endif  // AP_MISSION_ENABLED
@@ -1372,11 +1405,7 @@ void RC_Channel::do_aux_function_mission_reset(const AuxSwitchPos ch_flag)
     if (ch_flag != AuxSwitchPos::HIGH) {
         return;
     }
-    AP_Mission *mission = AP::mission();
-    if (mission == nullptr) {
-        return;
-    }
-    mission->reset();
+    AP::mission().reset();
 }
 #endif
 
@@ -1559,7 +1588,7 @@ bool RC_Channel::do_aux_function(const AuxFuncTrigger &trigger)
 #if AP_BATTERY_ENABLED
     case AUX_FUNC::BATTERY_MPPT_ENABLE:
         if (ch_flag != AuxSwitchPos::MIDDLE) {
-            AP::battery().MPPT_set_powered_state_to_all(ch_flag == AuxSwitchPos::HIGH);
+            AP::battery().set_powered_state_to_all(ch_flag == AuxSwitchPos::HIGH);
         }
         break;
 #endif
@@ -1781,7 +1810,7 @@ bool RC_Channel::do_aux_function(const AuxFuncTrigger &trigger)
         do_aux_function_retract_mount(ch_flag, 1);
         break;
 
-    case AUX_FUNC::MOUNT_LOCK: {
+    case AUX_FUNC::MOUNT_YAW_LOCK: {
         AP_Mount *mount = AP::mount();
         if (mount == nullptr) {
             break;
@@ -1789,6 +1818,49 @@ bool RC_Channel::do_aux_function(const AuxFuncTrigger &trigger)
         mount->set_yaw_lock(ch_flag == AuxSwitchPos::HIGH);
         break;
     }
+
+    case AUX_FUNC::MOUNT_RP_LOCK: {
+        AP_Mount *mount = AP::mount();
+        if (mount == nullptr) {
+            break;
+        }
+        //low is FPV:no ef locks,high is HORIZON lock:roll/pitch ef lock,middle is only pitch ef lock
+        switch (ch_flag) {
+        case AuxSwitchPos::HIGH:
+            mount->set_roll_lock(true);
+            mount->set_pitch_lock(true);
+            break;
+        case AuxSwitchPos::MIDDLE:
+            mount->set_roll_lock(false);
+            mount->set_pitch_lock(true);
+            break;
+        case AuxSwitchPos::LOW:
+            mount->set_roll_lock(false);
+            mount->set_pitch_lock(false);
+            break;
+        }
+        break;
+    }
+#if AP_MOUNT_POI_LOCK_ENABLED    
+   case AUX_FUNC::MOUNT_POI_LOCK: {
+        AP_Mount *mount = AP::mount();
+        if (mount == nullptr) {
+            break;
+        }
+        switch (ch_flag) {
+        case AuxSwitchPos::HIGH:
+            mount->set_poi_lock();
+            break;
+        case AuxSwitchPos::MIDDLE:
+            mount->suspend_poi_lock();
+            break;
+        case AuxSwitchPos::LOW:
+            mount->clear_poi_lock();
+            break;
+        }
+        break;
+    }
+#endif // AP_MOUNT_POI_LOCK_ENABLED
 
     case AUX_FUNC::MOUNT_LRF_ENABLE: {
         AP_Mount *mount = AP::mount();
@@ -1875,6 +1947,22 @@ bool RC_Channel::do_aux_function(const AuxFuncTrigger &trigger)
         // used to test emergency yaw reset
         AP::ahrs().request_yaw_reset();
         break;
+
+#if AP_AHRS_EKF_RESET_ENABLED
+    case AUX_FUNC::EKF_RESET:
+        if (ch_flag == AuxSwitchPos::HIGH) {
+            // only allowed while disarmed - resetting the EKF in flight would
+            // discard the in-flight state estimate
+            if (hal.util->get_soft_armed()) {
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF reset ignored: vehicle armed");
+            } else if (AP::ahrs().reset_configured_backend()) {
+                GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF bootstrap reset performed");
+            } else {
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF bootstrap reset failed");
+            }
+        }
+        break;
+#endif  // AP_AHRS_EKF_RESET_ENABLED
 
     case AUX_FUNC::AHRS_TYPE: {
 #if HAL_NAVEKF3_AVAILABLE && AP_EXTERNAL_AHRS_ENABLED

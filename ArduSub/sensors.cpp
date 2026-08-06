@@ -47,7 +47,7 @@ void Sub::read_rangefinder()
 #endif
 
     rangefinder_state.alt = temp_alt_m;
-    rangefinder_state.inertial_alt_cm = inertial_nav.get_position_z_up_cm();
+    rangefinder_state.inertial_alt_cm = pos_control.get_pos_estimate_U_m() * 100.0f;
     rangefinder_state.min = rangefinder.min_distance_orient(ROTATION_PITCH_270);
     rangefinder_state.max = rangefinder.max_distance_orient(ROTATION_PITCH_270);
 
@@ -66,11 +66,11 @@ void Sub::read_rangefinder()
     }
 
     // send rangefinder altitude and health to waypoint navigation library
-    wp_nav.set_rangefinder_terrain_offset_cm(
+    wp_nav.set_rangefinder_terrain_U_cm(
             rangefinder_state.enabled,
             rangefinder_state.alt_healthy,
             rangefinder_state.rangefinder_terrain_offset_cm);
-    circle_nav.set_rangefinder_terrain_offset_cm(
+    circle_nav.set_rangefinder_terrain_U_cm(
             rangefinder_state.enabled && wp_nav.rangefinder_used(),
             rangefinder_state.alt_healthy,
             rangefinder_state.rangefinder_terrain_offset_cm);

@@ -23,8 +23,6 @@ STM32_ST_USE_TIMER 5
 # crystal frequency
 OSCILLATOR_HZ 16000000
 
-define CH_CFG_ST_FREQUENCY 1000000
-
 # Available Flash
 FLASH_SIZE_KB 1024
 
@@ -129,9 +127,6 @@ PC10 SDIO_D2 SDIO
 PC11 SDIO_D3 SDIO
 PB15 SDIO_CK SDIO
 PD2 SDIO_CMD SDIO
-
-# reserve 256 bytes for comms between app and bootloader
-RAM_RESERVE_START 256
 
 # allow for reboot command for faster development
 define HAL_PERIPH_LISTEN_FOR_SERIAL_UART_REBOOT_CMD_PORT 0

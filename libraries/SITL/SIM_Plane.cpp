@@ -38,6 +38,13 @@ Plane::Plane(const char *frame_str) :
         coefficient = default_coefficients;
     }
 
+    // Chosen to approximately match a historical (simpler) battery model
+    constexpr float default_battery_resistance_ohm = 0.0145f;
+    battery.setup(sitl->batt_capacity_ah,
+                  default_battery_resistance_ohm,
+                  sitl->batt_voltage,
+                  ambient_outside_temperature_degC());
+
     mass = 2.0f;
 
     /*
@@ -101,9 +108,6 @@ Plane::Plane(const char *frame_str) :
     if (strstr(frame_str, "-3d")) {
         aerobatic = true;
         thrust_scale *= 1.5;
-        // setup parameters for plane-3d
-        AP_Param::load_defaults_file("@ROMFS/models/plane.parm", false);
-        AP_Param::load_defaults_file("@ROMFS/models/plane-3d.parm", false);
     }
 #endif
 
@@ -401,7 +405,6 @@ void Plane::calculate_forces(const struct sitl_input &input, Vector3f &rot_accel
     float elevator = filtered_servo_angle(input, 1);
     float rudder   = filtered_servo_angle(input, 3);
     bool launch_triggered = input.servos[6] > 1700;
-    float throttle;
     if (reverse_elevator_rudder) {
         elevator = -elevator;
         rudder = -rudder;
@@ -444,19 +447,14 @@ void Plane::calculate_forces(const struct sitl_input &input, Vector3f &rot_accel
     }
     //printf("Aileron: %.1f elevator: %.1f rudder: %.1f\n", aileron, elevator, rudder);
 
-    if (reverse_thrust) {
-        throttle = filtered_servo_angle(input, 2);
-    } else {
-        throttle = filtered_servo_range(input, 2);
-    }
-    
-    float thrust     = throttle;
-
-    battery_voltage = sitl->batt_voltage - 0.7*throttle;
-    battery_current = (battery_voltage/sitl->batt_voltage)*50.0f*sq(throttle);
+    float thrust = reverse_thrust ? filtered_servo_angle(input, 2) : filtered_servo_range(input, 2);
 
     if (ice_engine) {
         thrust = icengine.update(input);
+    } else {
+        if (battery_is_empty()) {
+            thrust = 0.0f;
+        }
     }
 
     // calculate angle of attack
@@ -526,7 +524,7 @@ void Plane::update(const struct sitl_input &input)
     update_wind(input);
     
     calculate_forces(input, rot_accel);
-    
+    update_battery(input);
     update_dynamics(rot_accel);
 
     /*
@@ -548,4 +546,14 @@ void Plane::update(const struct sitl_input &input)
 
     // update magnetic field
     update_mag_field_bf();
+}
+
+void Plane::update_battery(const struct sitl_input &input) {
+    battery.maybe_reset(sitl->batt_voltage, sitl->batt_capacity_ah);
+
+    float throttle = reverse_thrust ? filtered_servo_angle(input, 2) : filtered_servo_range(input, 2);
+    battery_current = 50.0f * sq(throttle);
+    battery.consume_energy(battery_current, AP_HAL::micros64());
+    battery_voltage = battery.get_voltage();
+    battery_temperature_degC = battery.get_temperature_degC();
 }

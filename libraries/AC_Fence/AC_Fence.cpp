@@ -14,6 +14,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_Terrain/AP_Terrain.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -53,15 +54,15 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Description: Allows you to enable (1) or disable (0) the fence functionality. Fences can still be enabled and disabled via mavlink or an RC option, but these changes are not persisted.
     // @Values: 0:Disabled,1:Enabled
     // @User: Standard
-    AP_GROUPINFO("ENABLE",      0,  AC_Fence,   _enabled,   0),
+    AP_GROUPINFO("ENABLE", 0, AC_Fence, _enabled, 0),
 
     // @Param: TYPE
     // @DisplayName: Fence Type
-    // @Description: Configured fence types held as bitmask. Max altitide, Circle and Polygon fences will be immediately enabled if configured. Min altitude fence will only be enabled once the minimum altitude is reached.
+    // @Description: Configured fence types held as bitmask. Max altitude, Circle and Polygon fences will be immediately enabled if configured. Min altitude fence will only be enabled once the minimum altitude is reached.
     // @Bitmask{Rover}: 1:Circle Centered on Home,2:Inclusion/Exclusion Circles+Polygons
     // @Bitmask{Copter, Plane, Sub}: 0:Max altitude,1:Circle Centered on Home,2:Inclusion/Exclusion Circles+Polygons,3:Min altitude
     // @User: Standard
-    AP_GROUPINFO("TYPE",        1,  AC_Fence,   _configured_fences,  AC_FENCE_TYPE_DEFAULT),
+    AP_GROUPINFO("TYPE", 1, AC_Fence, _configured_fences, AC_FENCE_TYPE_DEFAULT),
 
     // @Param: ACTION
     // @DisplayName: Fence Action
@@ -71,16 +72,16 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Values{Plane}: 0:Report Only,1:RTL,6:Guided,7:GuidedThrottlePass,8:AUTOLAND if possible else RTL
     // @Values: 0:Report Only,1:RTL or Land
     // @User: Standard
-    AP_GROUPINFO("ACTION",      2,  AC_Fence,   _action,        float(Action::RTL_AND_LAND)),
+    AP_GROUPINFO("ACTION", 2,  AC_Fence, _action, float(Action::RTL_AND_LAND)),
 
     // @Param{Copter, Plane, Sub}: ALT_MAX
     // @DisplayName: Fence Maximum Altitude
-    // @Description: Maximum altitude allowed before geofence triggers
+    // @Description: Maximum altitude allowed before geofence triggers. See FENCE_ALT_MAX_TP for reference frame.
     // @Units: m
     // @Range: 10 1000
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO_FRAME("ALT_MAX", 3, AC_Fence, _alt_max, AC_FENCE_ALT_MAX_DEFAULT, AP_PARAM_FRAME_COPTER | AP_PARAM_FRAME_SUB | AP_PARAM_FRAME_TRICOPTER | AP_PARAM_FRAME_HELI | AP_PARAM_FRAME_PLANE),
+    AP_GROUPINFO_FRAME("ALT_MAX",   3, AC_Fence, _alt_max_m,  AC_FENCE_ALT_MAX_DEFAULT, AP_PARAM_FRAME_COPTER | AP_PARAM_FRAME_SUB | AP_PARAM_FRAME_TRICOPTER | AP_PARAM_FRAME_HELI | AP_PARAM_FRAME_PLANE),
 
     // @Param: RADIUS
     // @DisplayName: Circular Fence Radius
@@ -88,7 +89,7 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Units: m
     // @Range: 30 10000
     // @User: Standard
-    AP_GROUPINFO("RADIUS",      4,  AC_Fence,   _circle_radius, AC_FENCE_CIRCLE_RADIUS_DEFAULT),
+    AP_GROUPINFO("RADIUS", 4,  AC_Fence, _circle_radius_m, AC_FENCE_CIRCLE_RADIUS_DEFAULT),
 
     // @Param: MARGIN
     // @DisplayName: Fence Margin
@@ -96,23 +97,23 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Units: m
     // @Range: 1 10
     // @User: Standard
-    AP_GROUPINFO("MARGIN",      5,  AC_Fence,   _margin, AC_FENCE_MARGIN_DEFAULT),
+    AP_GROUPINFO("MARGIN", 5, AC_Fence, _margin_m, AC_FENCE_MARGIN_DEFAULT),
 
     // @Param: TOTAL
     // @DisplayName: Fence polygon point total
     // @Description: Number of polygon points saved in eeprom (do not update manually)
     // @Range: 1 20
     // @User: Standard
-    AP_GROUPINFO("TOTAL",       6,  AC_Fence,   _total, 0),
+    AP_GROUPINFO("TOTAL", 6, AC_Fence, _total, 0),
 
     // @Param{Copter, Plane, Sub}: ALT_MIN
     // @DisplayName: Fence Minimum Altitude
-    // @Description: Minimum altitude allowed before geofence triggers
+    // @Description: Minimum altitude allowed before geofence triggers. See FENCE_ALT_MIN_TP for reference frame.
     // @Units: m
     // @Range: -100 100
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO_FRAME("ALT_MIN",     7,  AC_Fence,   _alt_min,       AC_FENCE_ALT_MIN_DEFAULT, AP_PARAM_FRAME_COPTER | AP_PARAM_FRAME_SUB | AP_PARAM_FRAME_TRICOPTER | AP_PARAM_FRAME_HELI | AP_PARAM_FRAME_PLANE),
+    AP_GROUPINFO_FRAME("ALT_MIN", 7,  AC_Fence, _alt_min_m, AC_FENCE_ALT_MIN_DEFAULT, AP_PARAM_FRAME_COPTER | AP_PARAM_FRAME_SUB | AP_PARAM_FRAME_TRICOPTER | AP_PARAM_FRAME_HELI | AP_PARAM_FRAME_PLANE),
 
     // @Param{Plane}: RET_RALLY
     // @DisplayName: Fence Return to Rally
@@ -121,7 +122,7 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Range: 0 1
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO_FRAME("RET_RALLY",   8,  AC_Fence,   _ret_rally,       0, AP_PARAM_FRAME_PLANE),
+    AP_GROUPINFO_FRAME("RET_RALLY", 8, AC_Fence, _ret_rally, 0, AP_PARAM_FRAME_PLANE),
 
     // @Param{Plane}: RET_ALT
     // @DisplayName: Fence Return Altitude
@@ -130,7 +131,7 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Range: 0 32767
     // @Increment: 1
     // @User: Standard
-    AP_GROUPINFO_FRAME("RET_ALT",   9,  AC_Fence,   _ret_altitude,       0.0f, AP_PARAM_FRAME_PLANE),
+    AP_GROUPINFO_FRAME("RET_ALT", 9,  AC_Fence, _ret_altitude, 0.0f, AP_PARAM_FRAME_PLANE),
 
     // @Param{Plane, Copter}: AUTOENABLE
     // @DisplayName: Fence Auto-Enable
@@ -162,7 +163,21 @@ const AP_Param::GroupInfo AC_Fence::var_info[] = {
     // @Units: m
     // @Range: 0 50
     // @User: Standard
-    AP_GROUPINFO("MARGIN_XY", 13,  AC_Fence,   _margin_xy, 0),
+    AP_GROUPINFO("MARGIN_XY", 13, AC_Fence, _margin_ne_m, 0),
+
+    // @Param: ALT_MAX_TP
+    // @DisplayName: Altitude max frame type
+    // @Description: The altitude reference frame for the maximum altitude fence. Can be AMSL, home-relative, origin relative or AGL.
+    // @User: Advanced
+    // @Values: 0:Above sea level, 1:Above Home, 2: Above Origin, 3: Above Terrain
+    AP_GROUPINFO_FRAME("ALT_MAX_TP", 14, AC_Fence, _alt_max_type, float(Location::AltFrame::ABOVE_HOME), AP_PARAM_FRAME_COPTER | AP_PARAM_FRAME_SUB | AP_PARAM_FRAME_TRICOPTER | AP_PARAM_FRAME_HELI | AP_PARAM_FRAME_PLANE),
+    
+    // @Param: ALT_MIN_TP
+    // @DisplayName: Altitude min frame type
+    // @Description: The altitude reference frame for the minimum altitude fence. Can be AMSL, home-relative, origin relative or AGL.
+    // @User: Advanced
+    // @Values: 0:Above sea level, 1:Above Home, 2: Above Origin, 3: Above Terrain
+    AP_GROUPINFO_FRAME("ALT_MIN_TP", 15, AC_Fence, _alt_min_type, float(Location::AltFrame::ABOVE_HOME), AP_PARAM_FRAME_COPTER | AP_PARAM_FRAME_SUB | AP_PARAM_FRAME_TRICOPTER | AP_PARAM_FRAME_HELI | AP_PARAM_FRAME_PLANE),
 
     AP_GROUPEND
 };
@@ -298,6 +313,11 @@ uint8_t AC_Fence::enable(bool value, uint8_t fence_types, bool update_auto_enabl
 
     if (!value) {
         clear_breach(fences_to_change);
+        if (update_auto_enable) {
+            // explicit user disable resets the manual-recovery suppression
+            // window so that a fresh fence enable will check immediately
+            _manual_recovery_start_ms = 0;
+        }
     }
 
     return fences_to_change;
@@ -398,10 +418,10 @@ uint8_t AC_Fence::get_enabled_fences() const
     return _enabled_fences & present();
 }
 
-/// get_horizontal_margin - returns the fence margin in meters
-float AC_Fence::get_horizontal_margin() const
+/// get_margin_ne_m - returns the fence margin in meters
+float AC_Fence::get_margin_ne_m() const
 {
-    return is_positive(_margin_xy.get()) ? _margin_xy.get() : _margin.get();
+    return is_positive(_margin_ne_m.get()) ? _margin_ne_m.get() : _margin_m.get();
 }
 
 // additional checks for the polygon fence:
@@ -417,7 +437,7 @@ bool AC_Fence::pre_arm_check_polygon(char *failure_msg, const uint8_t failure_ms
         return false;
     }
 
-    if (!_poly_loader.check_inclusion_circle_margin(get_horizontal_margin())) {
+    if (!_poly_loader.check_inclusion_circle_margin(get_margin_ne_m())) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Polygon fence margin is greater than inclusion circle radius");
         return false;
     }
@@ -428,11 +448,11 @@ bool AC_Fence::pre_arm_check_polygon(char *failure_msg, const uint8_t failure_ms
 // additional checks for the circle fence:
 bool AC_Fence::pre_arm_check_circle(char *failure_msg, const uint8_t failure_msg_len) const
 {
-    if (_circle_radius < 0) {
+    if (_circle_radius_m < 0) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Invalid Circle FENCE_RADIUS value");
         return false;
     }
-    if (_circle_radius < get_horizontal_margin()) {
+    if (_circle_radius_m < get_margin_ne_m()) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Circle FENCE_MARGIN is greater than FENCE_RADIUS");
         return false;
     }
@@ -443,18 +463,22 @@ bool AC_Fence::pre_arm_check_circle(char *failure_msg, const uint8_t failure_msg
 // additional checks for the alt fence:
 bool AC_Fence::pre_arm_check_alt(char *failure_msg, const uint8_t failure_msg_len) const
 {
-    if (_alt_max < 0.0f) {
+    if (_alt_max_m < 0.0f) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Invalid FENCE_ALT_MAX value");
         return false;
     }
 
-    if (_alt_min < -100.0f) {
+    if (_alt_min_m < -100.0f) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Invalid FENCE_ALT_MIN value");
         return false;
     }
     return true;
 }
 
+bool AC_Fence::terrain_database_required() const
+{
+    return _alt_min_type == Location::AltFrame::ABOVE_TERRAIN || _alt_max_type == Location::AltFrame::ABOVE_TERRAIN;
+}
 
 /// pre_arm_check - returns true if all pre-takeoff checks have completed successfully
 bool AC_Fence::pre_arm_check(char *failure_msg, const uint8_t failure_msg_len) const
@@ -526,28 +550,76 @@ bool AC_Fence::pre_arm_check(char *failure_msg, const uint8_t failure_msg_len) c
     }
 
     // validate FENCE_MARGIN parameter range
-    if (_margin < 0.0f) {
+    if (_margin_m < 0.0f) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Invalid FENCE_MARGIN value");
         return false;
     }
 
-    if (_margin_xy < 0.0f) {
+    if (_margin_ne_m < 0.0f) {
         hal.util->snprintf(failure_msg, failure_msg_len, "Invalid FENCE_MARGIN_XY value");
         return false;
     }
 
-    if (_alt_max < _alt_min) {
+    if (_alt_max_m < _alt_min_m) {
         hal.util->snprintf(failure_msg, failure_msg_len, "FENCE_ALT_MAX < FENCE_ALT_MIN");
         return false;
     }
 
-    if (_alt_max - _alt_min <= 2.0f * _margin) {
+    if (_alt_max_m - _alt_min_m <= 2.0f * _margin_m) {
         hal.util->snprintf(failure_msg, failure_msg_len, "FENCE_MARGIN too big");
         return false;
     }
 
     // if we got this far everything must be ok
     return true;
+}
+
+/*
+  get our altitude in the supplied frame
+  return false if not available
+ */
+bool AC_Fence::get_alt_in_frame_m(Location::AltFrame alt_frame, float &alt) const
+{
+    const auto &ahrs = AP::ahrs();
+
+    if (alt_frame == Location::AltFrame::ABOVE_ORIGIN) {
+        // try and get it relative origin
+        if (!ahrs.get_relative_position_D_origin_float(alt)) {
+            // treat as a breach if origin not known
+            return false;
+        }
+        alt = -alt;
+        return true;
+    }
+
+    if (alt_frame == Location::AltFrame::ABOVE_HOME) {
+        // try and get it relative origin
+        ahrs.get_relative_position_D_home(alt);
+        alt = -alt;
+        return true;
+    }
+
+    Location loc;
+    if (AP::ahrs().get_location(loc)) {
+        if (loc.get_alt_m(alt_frame, alt)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// update safe alt min - home *must* be set before this function is called with absolute reference frames
+void AC_Fence::update_safe_alt_min()
+{
+    // update safe alt min, failure to get home will have already breached above
+    if (_alt_min_type == Location::AltFrame::ABSOLUTE) {
+        float home_alt;
+        UNUSED_RESULT(AP::ahrs().get_home().get_alt_m(Location::AltFrame::ABSOLUTE, home_alt));
+        _safe_relhome_alt_min_m  = _alt_min_m - home_alt - _margin_m;
+    } else {
+        _safe_relhome_alt_min_m  = _alt_min_m - _margin_m;
+    }
 }
 
 /// returns true if we have freshly breached the maximum altitude
@@ -561,30 +633,41 @@ bool AC_Fence::check_fence_alt_max()
         return false;
     }
 
-    float alt;
-    AP::ahrs().get_relative_position_D_home(alt);
-    const float _curr_alt = -alt; // translate Down to Up
+    float _curr_alt_u_m;
+    if (!get_alt_in_alt_max_frame_m(_curr_alt_u_m)) {
+        // if we can't get the alt then it is a breach
+        return true;
+    }
 
     // record distance above/below breach
-    _alt_max_breach_distance = _curr_alt - _alt_max;
+    _alt_max_breach_distance_m = _curr_alt_u_m - _alt_max_m;
+
+    // update safe alt max, failure to get home will have already breached above
+    if (_alt_max_type == Location::AltFrame::ABSOLUTE) {
+        float home_alt;
+        UNUSED_RESULT(AP::ahrs().get_home().get_alt_m(Location::AltFrame::ABSOLUTE, home_alt));
+        _safe_relhome_alt_max_m  = _alt_max_m - home_alt - _margin_m;
+    } else {
+        _safe_relhome_alt_max_m = _alt_max_m - _margin_m;
+    }
 
     // check if we are over the altitude fence
-    if (_curr_alt >= _alt_max) {
+    if (_curr_alt_u_m >= _alt_max_m) {
         // check for a new breach or a breach of the backup fence
         if (!(_breached_fences & AC_FENCE_TYPE_ALT_MAX) ||
-            (!is_zero(_alt_max_backup) && _curr_alt >= _alt_max_backup)) {
+            (!is_zero(_alt_max_backup_m) && _curr_alt_u_m >= _alt_max_backup_m)) {
 
             // new breach
             record_breach(AC_FENCE_TYPE_ALT_MAX);
 
             // create a backup fence 20m higher up
-            _alt_max_backup = _curr_alt + AC_FENCE_ALT_MAX_BACKUP_DISTANCE;
+            _alt_max_backup_m = _curr_alt_u_m + AC_FENCE_ALT_MAX_BACKUP_DISTANCE;
             // new breach
             return true;
         }
         // old breach
         return false;
-    } else if (_curr_alt >= get_safe_alt_max()) {
+    } else if (_curr_alt_u_m >= get_safe_alt_max_m()) {
         record_margin_breach(AC_FENCE_TYPE_ALT_MAX);
     } else {
         clear_margin_breach(AC_FENCE_TYPE_ALT_MAX);
@@ -595,7 +678,7 @@ bool AC_Fence::check_fence_alt_max()
     // clear max alt breach if present
     if ((_breached_fences & AC_FENCE_TYPE_ALT_MAX) != 0) {
         clear_breach(AC_FENCE_TYPE_ALT_MAX);
-        _alt_max_backup = 0.0f;
+        _alt_max_backup_m = 0.0f;
     }
 
     return false;
@@ -612,32 +695,37 @@ bool AC_Fence::check_fence_alt_min()
         return false;
     }
 
-    float alt;
-    AP::ahrs().get_relative_position_D_home(alt);
-    const float _curr_alt = -alt; // translate Down to Up
+    float _curr_alt_u_m;
+    if (!get_alt_in_alt_min_frame_m(_curr_alt_u_m)) {
+        // if we can't get the alt then it is a breach
+        return true;
+    }
 
     // record distance above/below breach
-    _alt_min_breach_distance = _alt_min - _curr_alt;
+    _alt_min_breach_distance_m = _alt_min_m - _curr_alt_u_m;
+
+    // update safe alt min, failure to get home will have already breached above
+    update_safe_alt_min();
 
     // check if we are under the altitude fence
-    if (_curr_alt <= _alt_min) {
+    if (_curr_alt_u_m <= _alt_min_m) {
 
 
         // check for a new breach or a breach of the backup fence
         if (!(_breached_fences & AC_FENCE_TYPE_ALT_MIN) ||
-            (!is_zero(_alt_min_backup) && _curr_alt <= _alt_min_backup)) {
+            (!is_zero(_alt_min_backup_m) && _curr_alt_u_m <= _alt_min_backup_m)) {
 
             // new breach
             record_breach(AC_FENCE_TYPE_ALT_MIN);
 
             // create a backup fence 20m lower down
-            _alt_min_backup = _curr_alt - AC_FENCE_ALT_MIN_BACKUP_DISTANCE;
+            _alt_min_backup_m = _curr_alt_u_m - AC_FENCE_ALT_MIN_BACKUP_DISTANCE;
             // new breach
             return true;
         }
         // old breach
         return false;
-    } else if (_curr_alt <= get_safe_alt_min()) {
+    } else if (_curr_alt_u_m <= get_safe_alt_min_m()) {
         record_margin_breach(AC_FENCE_TYPE_ALT_MIN);
     } else {
         clear_margin_breach(AC_FENCE_TYPE_ALT_MIN);
@@ -648,7 +736,7 @@ bool AC_Fence::check_fence_alt_min()
     // clear min alt breach if present
     if ((_breached_fences & AC_FENCE_TYPE_ALT_MIN) != 0) {
         clear_breach(AC_FENCE_TYPE_ALT_MIN);
-        _alt_min_backup = 0.0f;
+        _alt_min_backup_m = 0.0f;
     }
 
     return false;
@@ -668,12 +756,17 @@ bool AC_Fence::auto_enable_fence_floor()
         return false;
     }
 
-    float alt;
-    AP::ahrs().get_relative_position_D_home(alt);
-    const float _curr_alt = -alt; // translate Down to Up
+    float _curr_alt_u_m;
+    if (!get_alt_in_alt_min_frame_m(_curr_alt_u_m)) {
+        // if we can't get the alt then don't enable yet
+        return true;
+    }
+
+    // update safe alt min, failure to get home will have already breached above
+    update_safe_alt_min();
 
     // check if we are over the altitude fence
-    if (!floor_enabled() && _curr_alt >= get_safe_alt_min()) {
+    if (!floor_enabled() && _curr_alt_u_m >= get_safe_alt_min_m()) {
         enable(true, AC_FENCE_TYPE_ALT_MIN, false);
         GCS_SEND_TEXT(MAV_SEVERITY_NOTICE, "Min Alt fence enabled (auto enable)");
         return true;
@@ -695,16 +788,13 @@ bool AC_Fence::check_fence_polygon()
 
     const bool was_breached = _breached_fences & AC_FENCE_TYPE_POLYGON;
 
-    Location loc;
-    const bool have_location = AP::ahrs().get_location(loc);
-
-    if (have_location && _poly_loader.breached(loc, _polygon_breach_distance)) {
+    if (_last_fence_check_loc_valid && _poly_loader.breached(_last_fence_check_loc, _polygon_breach_distance_m, _polygon_nearest_point)) {
         if (!was_breached) {
             record_breach(AC_FENCE_TYPE_POLYGON);
             return true;
         }
         return false;
-    } else if (_polygon_breach_distance < 0 && fabsf(_polygon_breach_distance) < get_horizontal_margin()) {
+    } else if (_polygon_breach_distance_m < 0 && fabsf(_polygon_breach_distance_m) < get_margin_ne_m()) {
         record_margin_breach(AC_FENCE_TYPE_POLYGON);
     } else {
         clear_margin_breach(AC_FENCE_TYPE_POLYGON);
@@ -730,26 +820,33 @@ bool AC_Fence::check_fence_circle()
     Vector2f home;
     if (AP::ahrs().get_relative_position_NE_home(home)) {
         // we (may) remain breached if we can't update home
-        _home_distance = home.length();
+        _home_distance_m = home.length();
+
+        if (is_zero(home.length_squared())) {
+            _circle_breach_direction.x = _circle_radius_m;
+            _circle_breach_direction.y = 0.0f;
+        } else {
+            _circle_breach_direction = home.normalized() * _circle_radius_m.get()  - home;
+        }
     }
 
     // record distance outside/inside the fence
-    _circle_breach_distance = _home_distance - _circle_radius;
+    _circle_breach_distance_m = _home_distance_m - _circle_radius_m;
 
     // check if we are outside the fence
-    if (_home_distance >= _circle_radius) {
+    if (_home_distance_m >= _circle_radius_m) {
 
         // check for a new breach or a breach of the backup fence
         if (!(_breached_fences & AC_FENCE_TYPE_CIRCLE) ||
-            (!is_zero(_circle_radius_backup) && _home_distance >= _circle_radius_backup)) {
+            (!is_zero(_circle_radius_backup_m) && _home_distance_m >= _circle_radius_backup_m)) {
             // new breach
             // create a backup fence 20m or 100m further out
             record_breach(AC_FENCE_TYPE_CIRCLE);
-            _circle_radius_backup = _home_distance + AC_FENCE_CIRCLE_RADIUS_BACKUP_DISTANCE;
+            _circle_radius_backup_m = _home_distance_m + AC_FENCE_CIRCLE_RADIUS_BACKUP_DISTANCE;
             return true;
         }
         return false;
-    } else if (_home_distance >= _circle_radius - get_horizontal_margin()) {
+    } else if (_home_distance_m >= _circle_radius_m - get_margin_ne_m()) {
         record_margin_breach(AC_FENCE_TYPE_CIRCLE);
     } else {
         clear_margin_breach(AC_FENCE_TYPE_CIRCLE);
@@ -760,7 +857,7 @@ bool AC_Fence::check_fence_circle()
     // clear circle breach if present
     if (_breached_fences & AC_FENCE_TYPE_CIRCLE) {
         clear_breach(AC_FENCE_TYPE_CIRCLE);
-        _circle_radius_backup = 0.0f;
+        _circle_radius_backup_m = 0.0f;
     }
 
     return false;
@@ -799,8 +896,8 @@ uint8_t AC_Fence::check(bool disable_auto_fences)
       and doing manual SITL fence testing
      */
     {
-        float alt;
-        AP::ahrs().get_relative_position_D_home(alt);
+        float _curr_alt_d_m;
+        AP::ahrs().get_relative_position_D_home(_curr_alt_d_m);
 
         // @LoggerMessage: FENC
         // @Description: Fence status - development diagnostic message
@@ -818,7 +915,7 @@ uint8_t AC_Fence::check(bool disable_auto_fences)
                                     _configured_fences,
                                     get_enabled_fences(),
                                     disabled_fences,
-                                    alt*-1);
+                                    _curr_alt_d_m*-1);
     }
 #endif
     
@@ -834,6 +931,9 @@ uint8_t AC_Fence::check(bool disable_auto_fences)
 
     // disable the (temporarily) disabled fences
     enable(false, disabled_fences, false);
+
+    // update the location at the time the check was made
+    _last_fence_check_loc_valid = AP::ahrs().get_location(_last_fence_check_loc);
 
     // maximum altitude fence check
     if (!(disabled_fences & AC_FENCE_TYPE_ALT_MAX) && check_fence_alt_max()) {
@@ -881,13 +981,13 @@ uint8_t AC_Fence::check(bool disable_auto_fences)
 }
 
 // returns true if the destination is within fence (used to reject waypoints outside the fence)
-bool AC_Fence::check_destination_within_fence(const Location& loc)
+bool AC_Fence::check_location_within_fence(const Location& loc)
 {
     // Altitude fence check - Fence Ceiling
     if ((get_enabled_fences() & AC_FENCE_TYPE_ALT_MAX)) {
-        int32_t alt_above_home_cm;
-        if (loc.get_alt_cm(Location::AltFrame::ABOVE_HOME, alt_above_home_cm)) {
-            if ((alt_above_home_cm * 0.01f) > _alt_max) {
+        float alt_m;
+        if (loc.get_alt_m(_alt_max_type, alt_m)) {
+            if (alt_m > _alt_max_m) {
                 return false;
             }
         }
@@ -895,9 +995,9 @@ bool AC_Fence::check_destination_within_fence(const Location& loc)
 
     // Altitude fence check - Fence Floor
     if ((get_enabled_fences() & AC_FENCE_TYPE_ALT_MIN)) {
-        int32_t alt_above_home_cm;
-        if (loc.get_alt_cm(Location::AltFrame::ABOVE_HOME, alt_above_home_cm)) {
-            if ((alt_above_home_cm * 0.01f) < _alt_min) {
+        float alt_m;
+        if (loc.get_alt_m(_alt_min_type, alt_m)) {
+            if (alt_m < _alt_min_m) {
                 return false;
             }
         }
@@ -905,7 +1005,7 @@ bool AC_Fence::check_destination_within_fence(const Location& loc)
 
     // Circular fence check
     if ((get_enabled_fences() & AC_FENCE_TYPE_CIRCLE)) {
-        if (AP::ahrs().get_home().get_distance(loc) > _circle_radius) {
+        if (AP::ahrs().get_home().get_distance(loc) > _circle_radius_m) {
             return false;
         }
     }
@@ -1002,21 +1102,51 @@ void AC_Fence::clear_margin_breach(uint8_t fence_type)
 float AC_Fence::get_breach_distance(uint8_t fence_type) const
 {
     fence_type = fence_type & present();
-    float max = -FLT_MAX;
+    float max_m = -FLT_MAX;
 
     if (fence_type & AC_FENCE_TYPE_ALT_MAX) {
-        max = MAX(_alt_max_breach_distance, max);
+        max_m = MAX(_alt_max_breach_distance_m, max_m);
     }
     if (fence_type & AC_FENCE_TYPE_ALT_MIN) {
-        max = MAX(_alt_min_breach_distance, max);
+        max_m = MAX(_alt_min_breach_distance_m, max_m);
     }
     if (fence_type & AC_FENCE_TYPE_CIRCLE) {
-        max = MAX(_circle_breach_distance, max);
+        max_m = MAX(_circle_breach_distance_m, max_m);
     }
     if (fence_type & AC_FENCE_TYPE_POLYGON) {
-        max = MAX(_polygon_breach_distance, max);
+        max_m = MAX(_polygon_breach_distance_m, max_m);
     }
-    return max;
+    return max_m;
+}
+
+/// get_breach_direction - returns direction to the closest fence breach in NED frame.
+/// fence_check_pos is the absolute position when the check was made.
+///  fence_type is a bitmask here.
+bool AC_Fence::get_breach_direction_NED(uint8_t fence_type, Vector3f& direction_to_closest, Location& fence_check_pos) const
+{
+    fence_type = fence_type & present();
+    if (_last_fence_check_loc_valid) {
+        fence_check_pos = _last_fence_check_loc;
+    }
+    float closest_m = FLT_MAX;
+
+    if (fence_type & AC_FENCE_TYPE_ALT_MAX && fabsf(_alt_max_breach_distance_m) < closest_m) {
+        direction_to_closest = Vector3f{0, 0, _alt_max_breach_distance_m};
+        closest_m = fabsf(_alt_max_breach_distance_m);
+    }
+    if (fence_type & AC_FENCE_TYPE_ALT_MIN && fabsf(_alt_min_breach_distance_m) < closest_m) {
+        direction_to_closest = Vector3f{0, 0, -_alt_min_breach_distance_m};
+        closest_m = fabsf(_alt_min_breach_distance_m);
+    }
+    if (fence_type & AC_FENCE_TYPE_CIRCLE && fabsf(_circle_breach_distance_m) < closest_m) {
+        direction_to_closest = Vector3f{_circle_breach_direction.x, _circle_breach_direction.y, 0};
+        closest_m = fabsf(_circle_breach_distance_m);
+    }
+    if (fence_type & AC_FENCE_TYPE_POLYGON && fabsf(_polygon_breach_distance_m) < closest_m) {
+        direction_to_closest = Vector3f{_polygon_nearest_point.x, _polygon_nearest_point.y, 0};
+        closest_m = fabsf(_polygon_breach_distance_m);
+    }
+    return _last_fence_check_loc_valid;
 }
 
 /// manual_recovery_start - caller indicates that pilot is re-taking manual control so fence should be disabled for 10 seconds
@@ -1025,6 +1155,11 @@ void AC_Fence::manual_recovery_start()
 {
     // return immediate if we haven't breached a fence
     if (!_breached_fences) {
+        return;
+    }
+
+    // Not armed so return
+    if (!hal.util->get_soft_armed()) {
         return;
     }
 
@@ -1094,10 +1229,11 @@ uint8_t AC_Fence::present() const { return 0; }
 uint8_t AC_Fence::get_enabled_fences() const { return 0; }
 
 bool AC_Fence::pre_arm_check(char *failure_msg, const uint8_t failure_msg_len) const  { return true; }
-
+bool AC_Fence::terrain_database_required() const { return false; }
 uint8_t AC_Fence::check(bool disable_auto_fences) { return 0; }
-bool AC_Fence::check_destination_within_fence(const Location& loc) { return true; }
+bool AC_Fence::check_location_within_fence(const Location& loc) { return true; }
 float AC_Fence::get_breach_distance(uint8_t fence_type) const { return 0.0; }
+bool AC_Fence::get_breach_direction_NED(uint8_t fence_type, Vector3f& direction, Location& fence_check_pos) const { return false; }
 void AC_Fence::get_fence_names(uint8_t fences, ExpandingString& msg) { }
 void AC_Fence::print_fence_message(const char* msg, uint8_t fences) const {}
 

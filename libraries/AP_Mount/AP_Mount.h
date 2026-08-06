@@ -42,7 +42,7 @@ class AP_Mount_SoloGimbal;
 class AP_Mount_Alexmos;
 class AP_Mount_SToRM32;
 class AP_Mount_SToRM32_serial;
-class AP_Mount_Gremsy;
+class AP_Mount_MAVLink;
 class AP_Mount_Siyi;
 class AP_Mount_Scripting;
 class AP_Mount_Xacti;
@@ -65,7 +65,7 @@ class AP_Mount
     friend class AP_Mount_Alexmos;
     friend class AP_Mount_SToRM32;
     friend class AP_Mount_SToRM32_serial;
-    friend class AP_Mount_Gremsy;
+    friend class AP_Mount_MAVLink;
     friend class AP_Mount_Siyi;
     friend class AP_Mount_Scripting;
     friend class AP_Mount_Xacti;
@@ -102,8 +102,8 @@ public:
 #if HAL_MOUNT_STORM32SERIAL_ENABLED
         SToRM32_serial = 5,  /// SToRM32 mount using custom serial protocol
 #endif
-#if HAL_MOUNT_GREMSY_ENABLED
-        Gremsy = 6,          /// Gremsy gimbal using MAVLink v2 Gimbal protocol
+#if HAL_MOUNT_MAVLINK_ENABLED
+        MAVLink = 6,         /// MAVLink v2 Gimbal protocol
 #endif
 #if HAL_MOUNT_SERVO_ENABLED
         BrushlessPWM = 7,    /// Brushless (stabilized) gimbal using PWM protocol
@@ -165,10 +165,28 @@ public:
     void set_mode_to_default() { set_mode_to_default(_primary); }
     void set_mode_to_default(uint8_t instance);
 
+    // set pitch_lock used in RC_TARGETING mode.  If true, the gimbal's pitch target is maintained in earth-frame (horizon does not move up and down) rather than body frame
+    void set_pitch_lock(bool pitch_lock) { set_pitch_lock(_primary, pitch_lock); }
+    void set_pitch_lock(uint8_t instance, bool pitch_lock);
+
+    // set roll_lock used in RC_TARGETING mode.  If true, the gimbal's roll target is maintained in earth-frame (horizon does not rotate) rather than body frame
+    void set_roll_lock(bool roll_lock) { set_roll_lock(_primary, roll_lock); }
+    void set_roll_lock(uint8_t instance, bool roll_lock);
+
     // set yaw_lock used in RC_TARGETING mode.  If true, the gimbal's yaw target is maintained in earth-frame meaning it will lock onto an earth-frame heading (e.g. North)
     // If false (aka "follow") the gimbal's yaw is maintained in body-frame meaning it will rotate with the vehicle
     void set_yaw_lock(bool yaw_lock) { set_yaw_lock(_primary, yaw_lock); }
     void set_yaw_lock(uint8_t instance, bool yaw_lock);
+    
+#if AP_MOUNT_POI_LOCK_ENABLED
+    // controls POI lock which locks gimbal to GPS point currently in view and switches to GPS Targeting mode, suspends tracking poi or clears it
+    void set_poi_lock() { set_poi_lock(_primary); }
+    void set_poi_lock(uint8_t instance);
+    void clear_poi_lock() { clear_poi_lock(_primary); }
+    void clear_poi_lock(uint8_t instance);
+    void suspend_poi_lock() { suspend_poi_lock(_primary); }
+    void suspend_poi_lock(uint8_t instance);
+#endif
 
     // set angle target in degrees
     // roll and pitch are in earth-frame
@@ -195,6 +213,12 @@ public:
 
     // handling of set_roi_sysid message
     MAV_RESULT handle_command_do_set_roi_sysid(const mavlink_command_int_t &packet);
+
+#if AP_MOUNT_ROI_WPNEXT_OFFSET_ENABLED
+    // point at next waypoint, with attitude offsets:
+    void set_roi_target_wpnext_offset(const Vector3f &rpy) { set_roi_target_wpnext_offset(_primary, rpy); }
+    void set_roi_target_wpnext_offset(uint8_t instance, const Vector3f &rpy);
+#endif  // AP_MOUNT_ROI_WPNEXT_OFFSET_ENABLED
 
     // mavlink message handling:
     MAV_RESULT handle_command(const mavlink_command_int_t &packet, const mavlink_message_t &msg);
@@ -228,15 +252,26 @@ public:
     // any failure_msg returned will not include a prefix
     bool pre_arm_checks(char *failure_msg, uint8_t failure_msg_len);
 
+#if AP_SCRIPTING_ENABLED
     // get target rate in deg/sec. returns true on success
     bool get_rate_target(uint8_t instance, float& roll_degs, float& pitch_degs, float& yaw_degs, bool& yaw_is_earth_frame);
 
     // get target angle in deg. returns true on success
     bool get_angle_target(uint8_t instance, float& roll_deg, float& pitch_deg, float& yaw_deg, bool& yaw_is_earth_frame);
 
-    // accessors for scripting backends and logging
+    // get mount target location. returns true on success
     bool get_location_target(uint8_t instance, Location& target_loc);
+#endif
+
+    // accessors for scripting backends and logging
     void set_attitude_euler(uint8_t instance, float roll_deg, float pitch_deg, float yaw_bf_deg);
+
+ #if AP_SCRIPTING_ENABLED
+    // used by a script sending messages to a physical device to
+    // indicate what targets can be either natively sent to the device
+    // or internally handled by the script
+    void set_natively_supported_mount_target_types(uint8_t instance, uint8_t types_mask);
+#endif  // AP_SCRIPTING_ENABLED
 
     // write mount log packet for all backends
     void write_log();
@@ -323,6 +358,7 @@ private:
     // Check if instance backend is ok
     AP_Mount_Backend *get_primary() const;
     AP_Mount_Backend *get_instance(uint8_t instance) const;
+    AP_Mount_Backend *mount_device_from_mavlink_gimbal_id(uint8_t gimbal_device_id) const;
 
     void handle_gimbal_report(mavlink_channel_t chan, const mavlink_message_t &msg);
 

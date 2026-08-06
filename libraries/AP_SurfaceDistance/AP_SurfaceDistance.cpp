@@ -15,17 +15,10 @@
  # define RANGEFINDER_TILT_CORRECTION 1
 #endif
 
-#ifndef RANGEFINDER_GLITCH_NUM_SAMPLES
- # define RANGEFINDER_GLITCH_NUM_SAMPLES  3 // number of rangefinder glitches in a row to take new reading
-#endif
-
-#ifndef RANGEFINDER_GLITCH_ALT_CM
- # define RANGEFINDER_GLITCH_ALT_M 2.00     // amount of rangefinder change to be considered a glitch
-#endif
-
 #ifndef RANGEFINDER_HEALTH_MIN
  # define RANGEFINDER_HEALTH_MIN 3          // number of good reads that indicates a healthy rangefinder
 #endif
+
 
 void AP_SurfaceDistance::update()
 {
@@ -71,28 +64,28 @@ void AP_SurfaceDistance::update()
     // tilt corrected but unfiltered, not glitch protected alt
     alt_m = tilt_correction * rangefinder->distance_orient(rotation);
 
-    // Glitch Handling. Rangefinder readings more than RANGEFINDER_GLITCH_ALT_M from the last good reading
+    // Glitch Handling. Rangefinder readings more than glitch_alt_m from the last good reading
     // are considered a glitch and glitch_count becomes non-zero
     // glitches clear after RANGEFINDER_GLITCH_NUM_SAMPLES samples in a row.
     // glitch_cleared_ms is set so surface tracking (or other consumers) can trigger a target reset
     const float glitch_m = alt_m - alt_glitch_protected_m;
-    bool reset_terrain_offset = false;
-    if (glitch_m >= RANGEFINDER_GLITCH_ALT_M) {
+    bool reset_terrain = false;
+    if ((glitch_m >= parameters->glitch_alt) && (parameters->glitch_alt > 0)) {
         glitch_count = MAX(glitch_count+1, 1);
         status |= (uint8_t)Surface_Distance_Status::Glitch_Detected;
-    } else if (glitch_m <= -RANGEFINDER_GLITCH_ALT_M) {
+    } else if ((glitch_m <= -parameters->glitch_alt) && (parameters->glitch_alt > 0)) {
         glitch_count = MIN(glitch_count-1, -1);
         status |= (uint8_t)Surface_Distance_Status::Glitch_Detected;
     } else {
         glitch_count = 0;
         alt_glitch_protected_m = alt_m;
     }
-    if (abs(glitch_count) >= RANGEFINDER_GLITCH_NUM_SAMPLES) {
+    if ((abs(glitch_count) >= parameters->glitch_num_samples) && (parameters->glitch_num_samples > 0)) {
         // clear glitch and record time so consumers (i.e. surface tracking) can reset their target altitudes
         glitch_count = 0;
         alt_glitch_protected_m = alt_m;
         glitch_cleared_ms = now;
-        reset_terrain_offset = true;
+        reset_terrain = true;
     }
 
     // filter rangefinder altitude
@@ -101,7 +94,7 @@ void AP_SurfaceDistance::update()
         if (timed_out) {
             // reset filter if we haven't used it within the last second
             alt_m_filt.reset(alt_m);
-            reset_terrain_offset = true;
+            reset_terrain = true;
             status |= (uint8_t)Surface_Distance_Status::Stale_Data;
         } else {
             // TODO: When we apply this library in plane we will need to be able to set the filter freq
@@ -114,17 +107,17 @@ void AP_SurfaceDistance::update()
     // remember inertial alt to allow us to interpolate rangefinder
     float pos_d_m;
     if (AP::ahrs().get_relative_position_D_origin_float(pos_d_m)) {
-        inertial_alt_m = -pos_d_m;
+        ref_pos_u_m = -pos_d_m;
     }
 
     // handle reset of terrain offset
-    if (reset_terrain_offset) {
+    if (reset_terrain) {
         if (rotation == ROTATION_PITCH_90) {
             // upward facing
-            terrain_offset_m = inertial_alt_m + alt_m;
+            terrain_u_m = ref_pos_u_m + alt_m;
         } else {
             // assume downward facing
-            terrain_offset_m = inertial_alt_m - alt_m;
+            terrain_u_m = ref_pos_u_m - alt_m;
         }
     }
 #if HAL_LOGGING_ENABLED
@@ -151,18 +144,24 @@ bool AP_SurfaceDistance::get_rangefinder_height_interpolated_m(float& height_m) 
     }
 
     height_m = alt_m_filt.get();
-    height_m += -pos_d_m - inertial_alt_m;
+    height_m += -pos_d_m - ref_pos_u_m;
     return true;
 }
 
 #if HAL_LOGGING_ENABLED
 void AP_SurfaceDistance::Log_Write(void) const
 {
+    // Don't log if there has never been data
+    if (last_healthy_ms == 0) {
+        return;
+    }
+
     // @LoggerMessage: SURF
     // @Vehicles: Copter
     // @Description: Surface distance measurement
     // @Field: TimeUS: Time since system startup
     // @Field: I: Instance
+    // @Field: St: Surface distance status
     // @FieldBitmaskEnum: St: Surface_Distance_Status
     // @Field: D: Raw Distance
     // @Field: FD: Filtered Distance
@@ -179,7 +178,7 @@ void AP_SurfaceDistance::Log_Write(void) const
                                 status,
                                 (float)alt_m,
                                 (float)alt_m_filt.get(),
-                                (float)terrain_offset_m
+                                (float)terrain_u_m
                                 );
 }
 #endif  // HAL_LOGGING_ENABLED

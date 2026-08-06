@@ -82,7 +82,7 @@ const struct AP_Param::GroupInfo *GCS::_chan_var_info[MAVLINK_COMM_NUM_BUFFERS];
 #else
 #error Need to set streamrates
 #endif  // APM_BUILD_TYPE
-#endif  // AP_MAV_DEFAULT_STREAM_RATE
+#endif  // AP_MAV_DEFAULT_STREAM_RATE_RAW_SENS
 
 // this must be ordered identically to GCS_MAVLINK::streams!
 static const uint8_t default_rates[] {
@@ -213,7 +213,7 @@ const AP_Param::GroupInfo GCS_MAVLINK::var_info[] = {
     // @Description: Bitmask for configuring this telemetry channel. For having effect on all channels, set the relevant mask in all MAVx_OPTIONS parameters. Keep in mind that part of the flags may require a reboot to take action.
     // @RebootRequired: True
     // @User: Standard
-    // @Bitmask: 0:Accept unsigned MAVLink2 messages, 1:Don't forward mavlink to/from, 2:Ignore Streamrate
+    // @Bitmask: 0:Accept unsigned MAVLink2 messages, 1:Don't forward mavlink to/from, 2:Ignore Streamrate, 3:forward mavlink packets that don't pass CRC
     AP_GROUPINFO("_OPTIONS",   20, GCS_MAVLINK, options, 0),
 
     // PARAMETER_CONVERSION - Added: May-2025 for ArduPilot-4.7
@@ -277,9 +277,6 @@ static const ap_message STREAM_POSITION_msgs[] = {
 };
 
 static const ap_message STREAM_RAW_CONTROLLER_msgs[] = {
-#if APM_BUILD_TYPE(APM_BUILD_Rover)
-    MSG_SERVO_OUT,
-#endif  // #if APM_BUILD_TYPE(APM_BUILD_Rover)
 };
 
 static const ap_message STREAM_RC_CHANNELS_msgs[] = {

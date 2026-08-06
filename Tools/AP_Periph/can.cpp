@@ -1647,7 +1647,7 @@ void AP_Periph_FW::can_start()
         g.can_protocol[0].set_and_save(AP_CAN::Protocol::DroneCAN);
         g.can_baudrate[0].set_and_save(1000000);
     }
-#endif // HAL_PERIPH_ENFORCE_AT_LEAST_ONE_PORT_IS_UAVCAN_1MHz
+#endif // AP_PERIPH_ENFORCE_AT_LEAST_ONE_PORT_IS_UAVCAN_1MHz && HAL_NUM_CAN_IFACES >= 2
 
     {
         /*
@@ -1708,9 +1708,9 @@ void AP_Periph_FW::can_start()
 #endif
         if (can_iface_periph[i] != nullptr) {
 #if HAL_CANFD_SUPPORTED
-            can_iface_periph[i]->init(g.can_baudrate[i], g.can_fdbaudrate[i]*1000000U, AP_HAL::CANIface::NormalMode);
+            can_iface_periph[i]->init(g.can_baudrate[i], g.can_fdbaudrate[i]*1000000U);
 #else
-            can_iface_periph[i]->init(g.can_baudrate[i], AP_HAL::CANIface::NormalMode);
+            can_iface_periph[i]->init(g.can_baudrate[i]);
 #endif
         }
     }
@@ -1758,6 +1758,9 @@ uint8_t AP_Periph_FW::get_motor_number(const uint8_t esc_number) const
  */
 void AP_Periph_FW::esc_telem_update()
 {
+    // update telem lib, this invalidates stale data
+    esc_telem.update();
+
     uint32_t mask = esc_telem.get_active_esc_mask();
     while (mask != 0) {
         int8_t i = __builtin_ffs(mask) - 1;
@@ -1781,8 +1784,10 @@ void AP_Periph_FW::esc_telem_update()
             pkt.temperature = nan;
         }
         float rpm;
-        if (esc_telem.get_raw_rpm(i, rpm)) {
+        float error_rate;
+        if (esc_telem.get_raw_rpm_and_error_rate(i, rpm, error_rate)) {
             pkt.rpm = rpm;
+            pkt.error_count = error_rate;
         }
 
 #if AP_EXTENDED_ESC_TELEM_ENABLED
@@ -1791,8 +1796,6 @@ void AP_Periph_FW::esc_telem_update()
             pkt.power_rating_pct = power_rating_pct;
         }
 #endif
-
-        pkt.error_count = 0;
 
         uint8_t buffer[UAVCAN_EQUIPMENT_ESC_STATUS_MAX_SIZE];
         uint16_t total_size = uavcan_equipment_esc_Status_encode(&pkt, buffer, !canfdout());
@@ -2001,6 +2004,9 @@ void AP_Periph_FW::can_update()
 #endif
 #if AP_PERIPH_RPM_STREAM_ENABLED
         rpm_sensor_send();
+#endif
+#if AP_SERVO_TELEM_ENABLED
+        servo_telem_update();
 #endif
     }
     const uint32_t now_us = AP_HAL::micros();

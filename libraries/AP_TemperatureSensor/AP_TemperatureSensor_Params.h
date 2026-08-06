@@ -37,6 +37,7 @@ public:
         MLX90614                    = 7,
         SHT3x                       = 8,
         MAX31865_3_wire             = 9,
+        TMP119                      = 10,
     };
 
     // option to map to another system component
@@ -48,6 +49,9 @@ public:
         Battery_ID_SerialNumber     = 4,
         Pitot_tube                  = 5,
         DroneCAN                    = 6,
+        Servo_Motor                 = 7,
+        Servo_PCB                   = 8,
+        Rangefinder                 = 9,
     };
 
     AP_Enum<Type> type;             // 0=disabled, others see frontend enum TYPE

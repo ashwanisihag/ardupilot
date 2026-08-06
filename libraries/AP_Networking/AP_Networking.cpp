@@ -32,6 +32,10 @@ extern const AP_HAL::HAL& hal;
 #include "AP_Networking_SITL.h"
 #endif
 
+#if AP_NETWORKING_BACKEND_SITL_TUN
+#include "AP_Networking_SITL_TUN.h"
+#endif
+
 const AP_Param::GroupInfo AP_Networking::var_info[] = {
     // @Param: ENABLE
     // @DisplayName: Networking Enable
@@ -150,6 +154,17 @@ void AP_Networking::init()
           when we are a PPP/Ethernet gateway we bring up the ethernet first
          */
         backend = NEW_NOTHROW AP_Networking_ChibiOS(*this);
+        backend_PPP = NEW_NOTHROW AP_Networking_PPP(*this);
+    }
+#endif
+
+#if AP_NETWORKING_BACKEND_SITL_TUN && AP_NETWORKING_PPP_GATEWAY_ENABLED
+    // SITL TAP backend takes the same "ethernet" slot the ChibiOS backend
+    // would on real hardware. Lets a sitl_periph_PPP build act as a PPPGW
+    // whose ethernet side is a host TAP device, so developer tools on the
+    // host can talk to the lwIP-served sockets (e.g. the PPPGW web UI).
+    if (backend == nullptr && option_is_set(OPTION::PPP_ETHERNET_GATEWAY)) {
+        backend = NEW_NOTHROW AP_Networking_SITL_TUN(*this);
         backend_PPP = NEW_NOTHROW AP_Networking_PPP(*this);
     }
 #endif
@@ -470,10 +485,17 @@ const char *AP_Networking::address_to_str(uint32_t addr)
 }
 
 #ifdef LWIP_PLATFORM_ASSERT
-void ap_networking_platform_assert(const char *msg, int line, const char *file)
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL || defined(HAL_DEBUG_BUILD)
+void ap_networking_platform_assert(const char *msg, int line)
 {
-    AP_HAL::panic("LWIP: %s: %s:%u", msg, file, line);
+    AP_HAL::panic("LWIP:%u %s", line, msg);
 }
+#else
+void ap_networking_platform_assert(int line)
+{
+    AP_HAL::panic("LWIP:%u", line);
+}
+#endif
 #endif
 
 #ifdef LWIP_HOOK_IP4_ROUTE

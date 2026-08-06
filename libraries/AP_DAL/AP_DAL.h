@@ -135,7 +135,7 @@ public:
     uint32_t available_memory() const { return _RFRN.available_memory; }
 #endif
 
-    int8_t get_ekf_type(void) const {
+    int8_t configured_ekf_type(void) const {
         return _RFRN.ekf_type;
     }
 
@@ -268,6 +268,9 @@ public:
         _ins.handle_message(msg);
     }
     void handle_message(const log_RISI &msg) {
+        _ins.handle_message(msg);
+    }
+    void handle_message(const log_RISJ &msg) {
         _ins.handle_message(msg);
     }
 

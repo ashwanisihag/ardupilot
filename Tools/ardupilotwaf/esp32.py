@@ -23,7 +23,7 @@ import subprocess
 import hal_common
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../libraries/AP_HAL_ESP32/hwdef/scripts'))
-import esp32_hwdef  # noqa:501
+import esp32_hwdef
 
 def configure(cfg):
     mcu_esp32s3 = True if (cfg.variant[0:7] == "esp32s3") else False
@@ -58,12 +58,11 @@ def configure(cfg):
     print("USING EXPRESSIF IDF:"+str(env.IDF))
 
     try:
-        hwdef_env, hwdef_files = generate_hwdef_h(env)
+        hwdef_obj = generate_hwdef_h(env)
     except Exception:
         traceback.print_exc()
-        cfg.fatal("Failed to generate hwdef")
-    hal_common.load_env_vars(cfg.env, hwdef_env)
-    hal_common.handle_hwdef_files(cfg, hwdef_files)
+        cfg.fatal("Failed to process hwdef.dat")
+    hal_common.process_hwdef_results(cfg, hwdef_obj)
 
 def generate_hwdef_h(env):
     '''run esp32_hwdef.py'''
@@ -77,13 +76,15 @@ def generate_hwdef_h(env):
     hwdef = [env.HWDEF]
     if env.HWDEF_EXTRA:
         hwdef.append(env.HWDEF_EXTRA)
-    eh = esp32_hwdef.ESP32HWDef(
+
+    hwdef_obj = esp32_hwdef.ESP32HWDef(
         outdir=hwdef_out,
         hwdef=hwdef,
         quiet=False,
     )
-    eh.run()
-    return eh.env_vars, eh.output_files
+    hwdef_obj.run()
+
+    return hwdef_obj
 
 # delete the output sdkconfig file when the input defaults changes. we take the
 # stamp as the output so we can compute the path to the sdkconfig, yet it

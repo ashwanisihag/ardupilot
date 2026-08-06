@@ -12,22 +12,29 @@
 // Write an AHRS2 packet
 void AP_AHRS::Write_AHRS2() const
 {
-    Vector3f euler;
-    Location loc;
-    Quaternion quat;
-    if (!get_secondary_attitude(euler) || !get_secondary_position(loc) || !get_secondary_quaternion(quat)) {
+    const auto *estimates = secondary_estimates;
+    if (estimates == nullptr) {
         return;
     }
+
+    // valid attitude required before logging (FIXME)
+    if (!estimates->attitude_valid) {
+        return;
+    }
+
+    const Location &loc = estimates->location;
+    const auto &quat = estimates->quaternion;
+
     float alt;
     if (!loc.initialised() || !loc.get_alt_m(Location::AltFrame::ABSOLUTE, alt)) {
-        alt = AP::logger().quiet_nanf();
+        alt = AP_Logger::quiet_nanf();
     }
     const struct log_AHRS pkt{
         LOG_PACKET_HEADER_INIT(LOG_AHR2_MSG),
         time_us : AP_HAL::micros64(),
-        roll  : (int16_t)(degrees(euler.x)*100),
-        pitch : (int16_t)(degrees(euler.y)*100),
-        yaw   : (uint16_t)(wrap_360_cd(degrees(euler.z)*100)),
+        roll  : (int16_t)(degrees(estimates->roll_rad)*100),
+        pitch : (int16_t)(degrees(estimates->pitch_rad)*100),
+        yaw   : (uint16_t)(wrap_360_cd(degrees(estimates->yaw_rad)*100)),
         alt   : alt,
         lat   : loc.lat,
         lng   : loc.lng,
@@ -96,7 +103,7 @@ void AP_AHRS::Write_POS() const
     float home;
     AP::ahrs().get_relative_position_D_home(home);
 
-    const auto nanf = AP::logger().quiet_nanf();
+    const auto nanf = AP_Logger::quiet_nanf();
     float origin_pos_up;
     if (get_relative_position_D_origin_float(origin_pos_up)) {
         origin_pos_up *= -1;  // down -> up

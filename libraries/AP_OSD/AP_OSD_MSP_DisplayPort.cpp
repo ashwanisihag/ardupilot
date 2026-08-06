@@ -149,6 +149,8 @@ void AP_OSD_MSP_DisplayPort::flush(void)
     // ok done processing displayport data
     // let's process incoming MSP frames (and reply if needed)
     _displayport->process_incoming_data();
+    // push any outgoing telemetry frames
+    _displayport->process_outgoing_data();
 }
 
 void AP_OSD_MSP_DisplayPort::init_symbol_set(uint8_t *lookup_table, const uint8_t size)
@@ -307,7 +309,7 @@ const uint8_t AP_OSD_MSP_DisplayPort::ap_to_inav_symbols_map[256][2] {
         {0x48,1},
         {0x49,1},
         {0x4A,1},
-        {0x4B,0},
+        {0x4B,1},
         {0x70,0},
         {0x71,0},
         {0x72,0},

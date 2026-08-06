@@ -27,7 +27,7 @@ void AP_DAL_GPS::start_frame()
         const log_RGPI old_RGPI = RGPI;
         const log_RGPJ old_RGPJ = RGPJ;
 
-        RGPI.status = (GPS_Status)gps.status(i);
+        RGPI.status = (uint8_t)gps.status(i);
         RGPI.antenna_offset = gps.get_antenna_offset(i);
 
         const Location &loc = gps.location(i);

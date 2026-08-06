@@ -23,8 +23,6 @@ STM32_ST_USE_TIMER 5
 # crystal frequency
 OSCILLATOR_HZ 16000000
 
-define CH_CFG_ST_FREQUENCY 1000000
-
 # Flash available
 FLASH_SIZE_KB 1024
 
@@ -102,9 +100,6 @@ define AP_PERIPH_MAG_ENABLED 1
 define AP_PERIPH_BARO_ENABLED 1
 define AP_PERIPH_RC_OUT_ENABLED 1
 define AP_PERIPH_NOTIFY_ENABLED 1
-
-# reserve 256 bytes for comms between app and bootloader
-RAM_RESERVE_START 256
 
 # allow for reboot command for faster development
 define HAL_PERIPH_LISTEN_FOR_SERIAL_UART_REBOOT_CMD_PORT 0

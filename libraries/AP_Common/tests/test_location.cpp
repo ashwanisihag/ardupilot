@@ -2,6 +2,7 @@
 #include <AP_Common/Location.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_AHRS/AP_AHRS.h>
+#include <AP_Mission/AP_Mission.h>
 #include <AP_Terrain/AP_Terrain.h>
 #include <GCS_MAVLink/GCS_Dummy.h>
 
@@ -11,6 +12,23 @@ AP_AHRS ahrs{AP_AHRS::FLAG_ALWAYS_USE_EKF};
 AP_Terrain terrain;
 
 GCS_Dummy _gcs;
+
+#if AP_MISSION_ENABLED
+// AP_AHRS::set_home writes home to the mission via AP::mission(),
+// which assumes any binary compiled with mission support instantiates
+// an AP_Mission object:
+class DummyMissionHolder {
+public:
+    bool start_command(const AP_Mission::Mission_Command& cmd) { return false; }
+    bool verify_command(const AP_Mission::Mission_Command& cmd) { return false; }
+    void exit_mission() {}
+    AP_Mission mission{
+        FUNCTOR_BIND_MEMBER(&DummyMissionHolder::start_command, bool, const AP_Mission::Mission_Command &),
+        FUNCTOR_BIND_MEMBER(&DummyMissionHolder::verify_command, bool, const AP_Mission::Mission_Command &),
+        FUNCTOR_BIND_MEMBER(&DummyMissionHolder::exit_mission, void)};
+};
+static DummyMissionHolder mission_holder;
+#endif  // AP_MISSION_ENABLED
 
 #define EXPECT_VECTOR2F_EQ(v1, v2)              \
 do {                                        \
@@ -400,11 +418,12 @@ TEST(Location, OffsetError)
 #define TEST_POLYGON_DISTANCE_POINTS(POLYGON, TEST_POINTS)                       \
     do {                                                                \
         for (uint32_t i = 0; i < ARRAY_SIZE(TEST_POINTS); i++) {        \
-            float distance; \
+            Vector2f direction; \
             Polygon_closest_distance_point(POLYGON,     \
                                             ARRAY_SIZE(POLYGON),\
-                                            TEST_POINTS[i].point, distance);\
-            EXPECT_TRUE(fabs(TEST_POINTS[i].distance - distance) <= 1.0f); \
+                                            TEST_POINTS[i].point, direction);\
+            EXPECT_TRUE(fabs(TEST_POINTS[i].distance - direction.length()) <= 1.0f); \
+            EXPECT_TRUE(fabs(degrees(TEST_POINTS[i].direction.angle()) - degrees(direction.angle())) <= 5.0f); \
         }                                                               \
     } while(0)
 
@@ -452,12 +471,13 @@ static const Vector2f London_boundary[] {
 static const struct {
     Vector2f point;
     float distance;
+    Vector2f direction;
 } London_test_points[] = {
-    { CARTESIAN(CENTER_LAT, CENTER_LON), 75.0f, },
-    { CARTESIAN(CENTER_NORTH_LAT, CENTER_LON), 37.5f, },
-    { CARTESIAN(CENTER_LAT, CENTER_EAST_LON), 37.5f, },
-    { CARTESIAN(CENTER_SOUTH_LAT, CENTER_LON), 37.5f, },
-    { CARTESIAN(CENTER_LAT, CENTER_WEST_LON), 37.5f, },
+    { CARTESIAN(CENTER_LAT, CENTER_LON), 75.0f, { 0.0f, 75.0f }},
+    { CARTESIAN(CENTER_NORTH_LAT, CENTER_LON), 37.5f, { 37.5f, 0.0f }},
+    { CARTESIAN(CENTER_LAT, CENTER_EAST_LON), 37.5f, { 0.0f, 37.5f }},
+    { CARTESIAN(CENTER_SOUTH_LAT, CENTER_LON), 37.5f, { -37.5f, 0.0f }},
+    { CARTESIAN(CENTER_LAT, CENTER_WEST_LON), 37.5f, { 0.0f, -37.5f }},
 };
 
 TEST(Location, London_distance)
