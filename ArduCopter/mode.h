@@ -571,7 +571,7 @@ public:
     const char* name4() const override { return "POI"; }
 
     // Required capabilities
-    bool requires_GPS() const override { return true; }
+    bool requires_position() const override { return true; }
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method) const override { return true; };
     bool is_autopilot() const override { return true; }
@@ -629,7 +629,7 @@ public:
     bool init(bool ignore_checks) override;
     void run() override;
     // --- Capabilities ---
-    bool requires_GPS() const override { return true; }
+    bool requires_position() const override { return true; }
     bool has_manual_throttle() const override { return false; }
     // --- Arming policy ---
     bool allows_arming(AP_Arming::Method /*method*/) const override { return true; }
@@ -700,7 +700,7 @@ public:
     Number mode_number() const override { return Number::CIRCLE_NOGPS; }  // 32
     bool init(bool ignore_checks) override;
     void run() override;
-    bool requires_GPS() const override { return false; }          // works without GPS
+    bool requires_position() const override { return false; }          // works without GPS
     bool has_manual_throttle() const override { return false; }   // AltHold-style (auto throttle)
     bool allows_arming(AP_Arming::Method) const override { return true; };
 	bool is_autopilot() const override { return false; }
@@ -744,7 +744,7 @@ public:
 	bool is_ready();
     bool init(bool ignore_checks) override;
     void run() override;
-    bool requires_GPS() const override;
+    bool requires_position() const override;
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override { return true; };
     bool is_autopilot() const override { return false; }
@@ -784,7 +784,7 @@ public:
     void run() override;
 
     // --- Capabilities ---
-    bool requires_GPS() const override { return false; }
+    bool requires_position() const override { return false; }
     bool has_manual_throttle() const override { return true; }   // like STABILIZE
     bool allows_arming(AP_Arming::Method) const override { return true; }
     bool is_autopilot() const override { return false; }
@@ -854,7 +854,6 @@ public:
     bool allows_arming(AP_Arming::Method method) const override;
     bool is_autopilot() const override { return true; }
     bool in_guided_mode() const override { return _mode == SubMode::NAVGUIDED || _mode == SubMode::NAV_SCRIPT_TIME; }
-    bool move_vehicle_on_ekf_reset() const;
 #if FRAME_CONFIG == HELI_FRAME
     bool allows_inverted() const override { return true; };
 #endif
@@ -1134,12 +1133,12 @@ public:
     void exit() override;
     void run() override;
 
-    bool requires_GPS() const override;
+    bool requires_position() const override;
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override;
     bool is_autopilot() const override { return true; }
     bool in_guided_mode() const override { return _mode == SubMode::NAVGUIDED || _mode == SubMode::NAV_SCRIPT_TIME; }
-    bool move_vehicle_on_ekf_reset() const;
+    bool move_vehicle_on_ekf_reset() const override;
 #if FRAME_CONFIG == HELI_FRAME
     bool allows_inverted() const override { return true; };
 #endif

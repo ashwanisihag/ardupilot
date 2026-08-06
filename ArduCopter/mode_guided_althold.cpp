@@ -163,7 +163,7 @@ bool ModeGuidedAltHold::is_ready()
     return copter.motors->armed();
 }
 
-bool ModeGuidedAltHold::requires_GPS() const
+bool ModeGuidedAltHold::requires_position() const
 {
     return false;
 }

@@ -175,7 +175,7 @@ void ModeAutoCustom::run()
 }
 
 // return true if a position estimate is required
-bool ModeAutoCustom::requires_GPS() const
+bool ModeAutoCustom::requires_position() const
 {
     // position estimate is required in all sub modes except attitude control
     return _mode != SubMode::NAV_ATTITUDE_TIME;
