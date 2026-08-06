@@ -63,7 +63,7 @@ float ModeCircleNoGPS::get_forward_speed_cms() const
     }
 
     // Fallback to GPS groundspeed/course if valid
-    if (AP::gps().status() >= AP_GPS::GPS_OK_FIX_3D) {
+    if (AP::gps().status() >= AP_GPS_FixType::FIX_3D) {
         const float gs_cms    = AP::gps().ground_speed();
         const float course_rad= radians(AP::gps().ground_course() * 0.01f);
         const float sign      = cosf(course_rad - yaw);             // projection onto body-X
@@ -77,13 +77,13 @@ float ModeCircleNoGPS::get_forward_speed_cms() const
 // ---------------- mode API ----------------
 bool ModeCircleNoGPS::init(bool ignore_checks)
 {
-    if (!pos_control->is_active_U()) {
-        pos_control->init_U_controller();
+    if (!pos_control->D_is_active()) {
+        pos_control->D_init_controller();
     }
-    pos_control->set_max_speed_accel_U_cm(
-        -(get_pilot_speed_dn_ms()*100.0f),  // m/s -> cm/s
-        g.pilot_speed_up_cms,               // cm/s
-        g.pilot_accel_u_cmss                // cm/s^2
+    pos_control->D_set_max_speed_accel_m(
+        get_pilot_speed_dn_ms(),            // m/s, positive magnitude
+        get_pilot_speed_up_ms(),            // m/s
+        get_pilot_accel_D_mss()             // m/s^2
     );
     // simple continuous circle "phase"
     _phase_start_ms = AP_HAL::millis();
@@ -105,10 +105,10 @@ bool ModeCircleNoGPS::init(bool ignore_checks)
 
 void ModeCircleNoGPS::run()
 {
-       pos_control->set_max_speed_accel_U_cm(
-        -(get_pilot_speed_dn_ms()*100.0f),  // m/s -> cm/s
-        g.pilot_speed_up_cms,               // cm/s
-        g.pilot_accel_u_cmss                // cm/s^2
+       pos_control->D_set_max_speed_accel_m(
+        get_pilot_speed_dn_ms(),            // m/s, positive magnitude
+        get_pilot_speed_up_ms(),            // m/s
+        get_pilot_accel_D_mss()             // m/s^2
     );
     float target_roll_rad = 0.0f;
     float target_pitch_rad = 0.0f;
@@ -120,7 +120,7 @@ void ModeCircleNoGPS::run()
     // Latch altitude target once (AltHold-style)
     static bool z_latched = false;
     if (!z_latched) {
-        pos_control->set_pos_target_U_from_climb_rate_m(0.0f);
+        pos_control->D_set_pos_target_from_climb_rate_ms(0.0f);
         z_latched = true;
     }
 
@@ -186,8 +186,8 @@ void ModeCircleNoGPS::run()
         roll_cd, pitch_cd, yaw_rate_cds
     );
 
-    pos_control->set_pos_target_U_from_climb_rate_m(0.0f);
-    pos_control->update_U_controller();
+    pos_control->D_set_pos_target_from_climb_rate_ms(0.0f);
+    pos_control->D_update_controller();
 
     // -------- periodic info --------
     static uint32_t last_info = 0;

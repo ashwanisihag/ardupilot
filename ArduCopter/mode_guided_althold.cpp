@@ -15,10 +15,10 @@ bool ModeGuidedAltHold::init(bool /*ignore_checks*/)
         return false;
     }
 
-    // Initialise vertical (U) controller for altitude hold
-    pos_control->init_U_controller();
-    pos_control->set_pos_target_U_from_climb_rate_cm(0.0f);
-    pos_control->update_U_controller();
+    // Initialise vertical (D, down-positive) controller for altitude hold
+    pos_control->D_init_controller();
+    pos_control->D_set_pos_target_from_climb_rate_ms(0.0f);
+    pos_control->D_update_controller();
 
     // Hold current heading (no GPS required)
     auto_yaw.set_mode(AutoYaw::Mode::HOLD);
@@ -51,15 +51,14 @@ bool ModeGuidedAltHold::init(bool /*ignore_checks*/)
 
 void ModeGuidedAltHold::run()
 {
-    // Vertical speed/accel limits (m/s, m/s^2)
-    const float down_ms   = -get_pilot_speed_dn_ms();          // downward is negative
-    const float up_ms     =  (g.pilot_speed_up_cms * 0.01f);
-    const float accel_mss =  (g.pilot_accel_u_cmss * 0.01f);
-    pos_control->set_max_speed_accel_U_m(down_ms, up_ms, accel_mss);
+    // Vertical speed/accel limits (m/s, m/s^2).
+    // The D-axis API takes positive magnitudes for both descent and climb
+    // (unlike the old U-axis call, which wanted a negated descent rate).
+    pos_control->D_set_max_speed_accel_m(get_pilot_speed_dn_ms(), get_pilot_speed_up_ms(), get_pilot_accel_D_mss());
 
-    // Hold altitude (0 climb), run U controller
-    pos_control->set_pos_target_U_from_climb_rate_cm(0.0f);
-    pos_control->update_U_controller();
+    // Hold altitude (0 climb), run D controller
+    pos_control->D_set_pos_target_from_climb_rate_ms(0.0f);
+    pos_control->D_update_controller();
 
     // Use U-controller thrust
     const Vector3f thrust_vec = pos_control->get_thrust_vector();
@@ -108,7 +107,7 @@ void ModeGuidedAltHold::run()
     //  - GPS has at least 3D fix and some satellites
     const bool ekf_healthy = !copter.failsafe.ekf;
     const bool gps_good =
-        (AP::gps().status() >= AP_GPS::GPS_OK_FIX_3D) &&
+        (AP::gps().status() >= AP_GPS_FixType::FIX_3D) &&
         (AP::gps().num_sats() >= 8);
 
     if (ekf_healthy && gps_good) {

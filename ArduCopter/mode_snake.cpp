@@ -99,7 +99,7 @@ float ModeSnake::get_forward_speed_cms() const
         return v_forward_ms * 100.0f;
     }
 
-    if (AP::gps().status() >= AP_GPS::GPS_OK_FIX_3D) {
+    if (AP::gps().status() >= AP_GPS_FixType::FIX_3D) {
         const float gs_cms = AP::gps().ground_speed();
         const float course_rad = radians(AP::gps().ground_course() * 0.01f);
         const float sign = cosf(course_rad - yaw);
@@ -110,11 +110,12 @@ float ModeSnake::get_forward_speed_cms() const
 
 bool ModeSnake::init(bool ignore_checks)
 {
-    if (!pos_control->is_active_U()) {
-        pos_control->init_U_controller();
+    if (!pos_control->D_is_active()) {
+        pos_control->D_init_controller();
     }
-    pos_control->set_max_speed_accel_U_cm(-(get_pilot_speed_dn_ms()*100.0f), g.pilot_speed_up_cms, g.pilot_accel_u_cmss);
-    pos_control->set_correction_speed_accel_U_cm   (-(get_pilot_speed_dn_ms()*100.0f), g.pilot_speed_up_cms, g.pilot_accel_u_cmss);
+    // D-axis API takes positive magnitudes (the old U-axis call wanted a negated descent rate)
+    pos_control->D_set_max_speed_accel_m(get_pilot_speed_dn_ms(), get_pilot_speed_up_ms(), get_pilot_accel_D_mss());
+    pos_control->D_set_correction_speed_accel_m(get_pilot_speed_dn_ms(), get_pilot_speed_up_ms(), get_pilot_accel_D_mss());
 
     _phase = SnakePhase::CALIBRATE;
 
@@ -153,10 +154,10 @@ void ModeSnake::run()
     const float target_speed_ms = constrain_float(_p_speed_ms.get(), 0.5f, 20.0f);
     const float roll_amp_deg    = constrain_float(_p_roll_deg.get(), 0.0f, 35.0f);
 
-    pos_control->set_max_speed_accel_U_cm(
-        -(get_pilot_speed_dn_ms()*100.0f),   // m/s -> cm/s
-        g.pilot_speed_up_cms,                // already cm/s
-        g.pilot_accel_u_cmss                 // cm/s^2
+    pos_control->D_set_max_speed_accel_m(
+        get_pilot_speed_dn_ms(),             // m/s, positive magnitude
+        get_pilot_speed_up_ms(),             // m/s
+        get_pilot_accel_D_mss()              // m/s^2
     );
 
     float target_roll_rad = 0.0f;
@@ -168,7 +169,7 @@ void ModeSnake::run()
 
     static bool z_latched = false;
     if (!z_latched) {
-        pos_control->set_pos_target_U_from_climb_rate_m(0.0f);
+        pos_control->D_set_pos_target_from_climb_rate_ms(0.0f);
         z_latched = true;
     }
 
@@ -397,6 +398,6 @@ void ModeSnake::run()
         roll_cd, pitch_cd, yaw_rate_cds
     );
 
-    pos_control->set_pos_target_U_from_climb_rate_m(0.0f);
-    pos_control->update_U_controller();
+    pos_control->D_set_pos_target_from_climb_rate_ms(0.0f);
+    pos_control->D_update_controller();
 }
